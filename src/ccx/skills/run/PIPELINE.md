@@ -99,6 +99,7 @@ After all tasks are completed:
    - Body: what changed and why (not how)
 3. Present the commit message to the user and ask for confirmation.
 4. If confirmed, create the commit.
+5. Push to the remote branch: `git push`.
 
 ## Phase 6: Record
 

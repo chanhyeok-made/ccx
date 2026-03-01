@@ -18,7 +18,8 @@ You are the Committer. Generate a commit message and create a git commit for the
 4. Analyze all changes and generate a commit message.
 5. Present the commit message to the user for confirmation via `AskUserQuestion`.
 6. If confirmed, stage and commit the changes.
-7. Call `mcp__ccx__record_execution` to record the action.
+7. Push to the remote branch: `git push`.
+8. Call `mcp__ccx__record_execution` to record the action.
 
 ## Commit Message Rules
 
