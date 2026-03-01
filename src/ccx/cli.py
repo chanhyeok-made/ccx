@@ -145,31 +145,28 @@ def _write_mcp_json(project: Path, force: bool):
 
 
 def _create_base_context_starter(project: Path):
-    """Create base-context.yaml if it doesn't exist."""
+    """Create base-context.yaml by scanning the project."""
     target = project / "base-context.yaml"
     if target.exists():
         click.echo("  base-context.yaml already exists, skipping")
         return
 
-    example = Path(__file__).parent / "base-context.example.yaml"
-    if example.exists():
-        shutil.copy2(example, target)
-        click.echo("  Created base-context.yaml from example template")
-    else:
-        import yaml
-        starter = {
-            "project_name": project.name,
-            "stack": {"runtime": "", "framework": "", "database": ""},
-            "architecture": "# Describe your project architecture here\n",
-            "structure": "# Paste your directory tree here\n",
-            "exception_rules": {
-                "forbidden": [],
-                "required": [],
-                "gotchas": [],
-            },
-        }
-        target.write_text(yaml.dump(starter, default_flow_style=False, allow_unicode=True), encoding="utf-8")
-        click.echo("  Created base-context.yaml starter")
+    import yaml
+    from ccx.scanner import scan_project
+
+    click.echo("  Scanning project...")
+    context = scan_project(str(project))
+
+    target.write_text(
+        yaml.dump(context, default_flow_style=False, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    stack = context.get("stack", {})
+    if stack:
+        parts = [f"{k}: {v}" for k, v in stack.items() if v]
+        click.echo(f"  Detected: {', '.join(parts)}")
+    click.echo("  Created base-context.yaml (auto-generated, review and edit as needed)")
 
 
 def main():
