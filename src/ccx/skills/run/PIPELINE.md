@@ -1,238 +1,114 @@
-# ccx Pipeline — Detailed Instructions
+# ccx Pipeline
 
-## IMPORTANT: Main Agent Role
+## Role
 
-You are a **pure orchestrator**. You coordinate subagents and handle ALL user interaction.
+You are a **pure orchestrator**. You hold only: `project_dir`, user request, analysis summary, task list, per-task status. You do NOT read files, load context, or make implementation decisions — subagents do all heavy work via MCP.
 
-**What you hold:**
-- `project_dir` path
-- User's original request
-- Analysis summary (a few lines — produced by subagent)
-- Task list (IDs + one-line descriptions)
-- Per-task status (one line each: success/fail + summary)
+## Rules
 
-**What you do:**
-- Launch subagents and receive their results
-- ALL user communication: show progress, ask questions, get confirmations
-- Call `AskUserQuestion` with **concrete options** whenever user input is needed
+**User interaction:** Only main agent talks to the user. Every subagent prompt MUST include: `"Do NOT use AskUserQuestion. Return questions to the main agent."`
 
-**What you do NOT do:**
-- Read file contents
-- Load project context (subagents do this via MCP)
-- Analyze code or make implementation decisions
+**AskUserQuestion protocol:**
+1. ALWAYS call with `questions` array containing `question`, `header` (≤12 chars), `options` (2-4 items with `label` + `description`), `multiSelect: false`
+2. After every call, check response. If empty → output `⚠️ 사용자 응답 없음. 파이프라인을 중단합니다.` → record failure → exit. NEVER fabricate answers. NEVER proceed without explicit user input.
 
-## CRITICAL: User Interaction Rules
+**Checkpoint shorthand:** `>>> CHECKPOINT("질문", "header", ["Option1", "Option2", "Option3"])` means: call AskUserQuestion with those values. Each option label needs a description you generate from context. Standard checkpoint behavior: "Proceed" → next phase, "Modify" → ask what to change (with AskUserQuestion + options) then re-confirm, "Cancel" → record cancelled status → exit.
 
-**Only the main agent talks to the user.** Subagents NEVER interact with the user directly.
+**Ambiguity resolution:** Analyzer returns `{question, suggested_answers}` → map to AskUserQuestion questions array (max 4 per call). If suggested_answers < 2, add sensible options from context. Collect answers → re-launch analyzer with answers → show final result.
 
-When a subagent needs user input (e.g., ambiguities found):
-1. Subagent returns the questions to main agent
-2. Main agent presents them to user via `AskUserQuestion` **with concrete options**
-3. Main agent passes answers back by resuming or re-launching the subagent
-
-**AskUserQuestion format rules:**
-- ALWAYS provide `options` with 2-4 concrete choices
-- NEVER call AskUserQuestion without options — it will auto-submit and skip user input
-- Each question must have a `header` (short label) and clear `description` per option
-- For ambiguities: convert each into a multiple-choice question with sensible defaults
-- For checkpoints: options are always "Proceed" / "Modify" / "Cancel"
-
-**Subagent prompt rules:**
-- ALWAYS include this line in every subagent prompt: "Do NOT use AskUserQuestion. Return questions to the main agent."
-- Subagents must return ambiguities/questions as structured data, not attempt to ask the user
+**Analysis cache protocol:**
+- Before reading code, call `mcp__ccx__get_analysis_cache(project_dir, scope)` for each scope in the request.
+- `hit=true, stale=false` → use cached entry, skip reading code for that scope.
+- `hit=true, stale=true` → re-analyze only changed files (see `stale_reason`), then save updated cache.
+- `hit=false` → full analysis, then call `mcp__ccx__save_analysis_cache` with results.
+- After implementation changes files, call `mcp__ccx__invalidate_analysis_cache` for affected scopes.
 
 ---
 
-## [Phase 1/5] Analyze Request
+## [Phase 1/5] Analyze
 
-Launch `Agent` with `subagent_type: "general-purpose"`. Prompt:
+Launch `general-purpose` Agent:
 
-> You are an Analyzer. Load project context by calling `mcp__ccx__load_project_context("{project_dir}")` and `mcp__ccx__get_session("{project_dir}")`.
->
-> Then analyze this request: "{user_request}"
->
-> Rules:
-> - If anything is ambiguous, list it as a question with 2-3 suggested answers — do NOT assume.
-> - Keep intent to ONE sentence.
-> - Scope = module/layer/feature level, not file level.
-> - Incorporate any previous session context.
+> You are an Analyzer. Call `mcp__ccx__load_project_context("{project_dir}")` and `mcp__ccx__get_session("{project_dir}")`.
+> Analyze: "{user_request}"
+> - For each scope in the request, call `mcp__ccx__get_analysis_cache("{project_dir}", scope)` first.
+>   - Cache hit (not stale) → use cached summary, skip reading code for that scope.
+>   - Cache miss or stale → read code, analyze, then call `mcp__ccx__save_analysis_cache` to cache results.
+> - Ambiguous → list as `{question, suggested_answers: [opt1, opt2, ...]}`, do NOT assume.
+> - Intent: one sentence. Scope: module/layer level. Include session context.
 > - Do NOT use AskUserQuestion. Return questions to the main agent.
 >
-> Return EXACTLY this format:
-> - Intent: [one sentence]
-> - Scope: [comma-separated list]
-> - Constraints: [list, including relevant project exception rules]
-> - Ambiguities: [list of {question, suggested_answers: [option1, option2, ...]} or "none"]
+> Return: Intent / Scope / Constraints / Ambiguities
 
-**Show the analysis result to the user.**
+Show result. Resolve ambiguities if any (see protocol above).
 
-### Resolve Ambiguities (if any)
-
-If the analyzer returned ambiguities:
-1. For EACH ambiguity, call `AskUserQuestion` with the question and suggested answers as options.
-2. Collect all answers.
-3. Re-launch the analyzer subagent with the original request + answers to produce a final analysis.
-4. Show the updated analysis to the user.
-
-### >>> CHECKPOINT: Confirm Analysis
-
-Call `AskUserQuestion`:
-- question: "Is this analysis correct?"
-- options: "Proceed", "Modify", "Cancel"
-
-On "Proceed": continue to Phase 2.
-On "Modify": ask what to change, update analysis, re-confirm.
-On "Cancel": jump to Phase 5 (Record) with cancelled status.
+>>> CHECKPOINT("분석 결과가 맞나요?", "분석 확인", ["Proceed", "Modify", "Cancel"])
 
 ---
 
 ## [Phase 2/5] Plan
 
-Launch `Agent` with `subagent_type: "general-purpose"`. Prompt:
+Launch `general-purpose` Agent:
 
-> You are a Planner. Load project context by calling `mcp__ccx__load_project_context("{project_dir}")`.
->
-> Based on this confirmed analysis:
-> - Intent: {intent}
-> - Scope: {scope}
-> - Constraints: {constraints}
->
-> Decompose into executable tasks.
->
-> Rules:
-> - Each task must be independently implementable.
-> - Specify dependencies explicitly.
-> - One logical change per task.
-> - If a task touches multiple modules, split it.
+> You are a Planner. Call `mcp__ccx__load_project_context("{project_dir}")`.
+> Analysis: Intent={intent}, Scope={scope}, Constraints={constraints}
+> - Each task: independently implementable, one logical change, explicit dependencies.
 > - Do NOT use AskUserQuestion. Return results to the main agent.
 >
-> Return a table:
-> | # | Task | Target modules | Complexity | Depends On |
-> And an execution order like: [T1] → [T2, T3] → [T4]
+> Return: table (# / Task / Target modules / Complexity / Depends On) + execution order
 
-**Show the plan to the user.**
+Show plan. Create tasks with `TaskCreate`, set dependencies with `TaskUpdate`.
 
-Create tasks with `TaskCreate` and set dependencies with `TaskUpdate`.
-
-### >>> CHECKPOINT: Confirm Plan
-
-Call `AskUserQuestion`:
-- question: "Should I proceed with this plan?"
-- options: "Proceed", "Modify", "Cancel"
-
-On "Proceed": continue to Phase 3.
-On "Modify": ask what to change, update tasks, re-confirm.
-On "Cancel": jump to Phase 5 (Record) with cancelled status.
+>>> CHECKPOINT("이 계획대로 진행할까요?", "계획 확인", ["Proceed", "Modify", "Cancel"])
 
 ---
 
-## [Phase 3/5] Execute Tasks
+## [Phase 3/5] Execute
 
-For each task (in dependency order):
+For each task in dependency order, output `### Executing T{N}: {description}`:
 
-Output: `### Executing T{N}: {description}`
+**3a. Research** — Launch `Explore` Agent:
+> Task: {task_description}. Project dir: {project_dir}.
+> Find relevant files. Do NOT use AskUserQuestion. Return results to the main agent.
+> Return: file paths + reasons, dependency relationships, impact zone. No file contents.
 
-### Step 3a: Research (subagent — read-only)
-
-Launch `Agent` with `subagent_type: "Explore"`. Prompt:
-
-> Task: {task_description}
-> Project dir: {project_dir}
->
-> Find files relevant to this task. Load project context via `mcp__ccx__load_project_context("{project_dir}")` if needed.
+**3b. Implement** — Launch `general-purpose` Agent:
+> Task: {task_description}. Project dir: {project_dir}.
+> Files: {from research}. Impact zone: {from research}.
+> Call `mcp__ccx__load_project_context`. Read files, implement. Follow existing patterns.
 > Do NOT use AskUserQuestion. Return results to the main agent.
->
-> Return ONLY:
-> - Relevant file paths with one-line reasons
-> - Key dependency relationships (imports/imported-by)
-> - Impact zone (files that could break)
->
-> Do NOT return file contents.
+> Return: changed files (path, type, intent) + assumptions.
 
-### Step 3b: Implement (subagent — read/write)
-
-Launch `Agent` with `subagent_type: "general-purpose"`. Prompt:
-
-> Task: {task_description}
-> Project dir: {project_dir}
-> Relevant files: {file paths from research}
-> Impact zone: {impact zone from research}
->
-> Load project rules via `mcp__ccx__load_project_context("{project_dir}")`.
-> Read the relevant files, implement the changes.
-> Follow existing code patterns. Respect ALL exception rules.
-> Produce minimal, focused changes.
+**3c. Review** — Launch `general-purpose` Agent:
+> Task: {task_description}. Changed: {from implement}. Impact: {from research}. Project dir: {project_dir}.
+> Call `mcp__ccx__check_rules`. Verify: correctness, side effects, rules, patterns, edge cases.
 > Do NOT use AskUserQuestion. Return results to the main agent.
->
-> Return ONLY:
-> - List of changed files (path, type: create/modify/delete, one-line intent)
-> - Assumptions made (if any)
+> Return: verdict (approve/reject/request_changes), issues, summary.
 
-### Step 3c: Review (subagent — read-only)
-
-Launch `Agent` with `subagent_type: "general-purpose"`. Prompt:
-
-> Task: {task_description}
-> Changed files: {list from implementation}
-> Impact zone: {from research}
-> Project dir: {project_dir}
->
-> Call `mcp__ccx__check_rules` to get the project rule checklist.
-> Read all changed files and verify:
-> 1. CORRECTNESS — does it achieve the stated intent?
-> 2. SIDE EFFECTS — does it break anything in the impact zone?
-> 3. RULES — does it respect all project rules?
-> 4. PATTERNS — does it follow existing code patterns?
-> 5. EDGE CASES — are obvious edge cases handled?
-> Do NOT use AskUserQuestion. Return results to the main agent.
->
-> Return ONLY:
-> - Verdict: approve / reject / request_changes
-> - Issues: [{severity, file, description, fix_suggestion}] (empty if approved)
-> - Summary: one line
-
-**On reject or request_changes:**
-- Launch a new implementation subagent with the issues
-- Re-review with a new review subagent
-- Maximum 3 retries per task
-
-Mark task completed with `TaskUpdate`.
-
-Output: `Task T{N} complete: {one-line summary}`
+On reject/request_changes → re-implement with issues → re-review. Max 3 retries.
+After successful implementation, call `mcp__ccx__invalidate_analysis_cache("{project_dir}", scope)` for each scope affected by the changes.
+Mark completed with `TaskUpdate`. Output: `Task T{N} complete: {summary}`
 
 ---
 
 ## [Phase 4/5] Commit & Push
 
-After all tasks are completed:
+1. Run `git diff --stat`
+2. Generate Conventional Commits message: `type(scope): description` + body
 
-1. Run `git diff --stat` (NOT full diff).
-2. Generate a Conventional Commits message from the accumulated task summaries:
-   - Format: `type(scope): description`
-   - Types: feat, fix, refactor, docs, test, chore
-   - Body: what changed and why
-3. Call `AskUserQuestion` with:
-   - question: "Commit with this message?" (show the message)
-   - options: "Commit & Push", "Edit message", "Skip commit"
-4. If confirmed, stage, commit, and push.
+>>> CHECKPOINT("이 메시지로 커밋할까요?\n\n{commit_message}", "커밋 확인", ["Commit & Push", "Edit message", "Skip commit"])
+
+3. If confirmed, stage + commit + push.
 
 ---
 
 ## [Phase 5/5] Record
 
-Call `mcp__ccx__record_execution` with:
-- `project_dir`: current project directory
-- `request`: original user request
-- `success`: whether the pipeline succeeded
-- `summary`: brief summary
-- `changes`: list of file changes
-
+Call `mcp__ccx__record_execution(project_dir, request, success, summary, changes)`.
 Output: `Pipeline complete. {summary}`
 
 ---
 
 ## Error Handling
 
-- If any phase fails critically, record via `mcp__ccx__record_execution` and report to the user.
-- For non-critical review warnings, fix if possible and continue.
-- Always leave the codebase in a clean state.
+Critical failure → record via `mcp__ccx__record_execution` + report to user. Non-critical → fix + continue. Always leave codebase clean.

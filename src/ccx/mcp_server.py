@@ -7,6 +7,12 @@ from mcp.server.fastmcp import FastMCP
 
 from ccx.config import load_base_context
 from ccx.session import load_session, save_record, get_context_summary
+from ccx.analysis_cache import (
+    get_analysis_cache as _get_cache,
+    save_analysis_cache as _save_cache,
+    invalidate_cache as _invalidate_cache,
+    list_cached_scopes as _list_scopes,
+)
 
 mcp = FastMCP("ccx")
 
@@ -97,6 +103,81 @@ def record_execution(
         changes=changes,
     )
     return {"status": "recorded", "record": record}
+
+
+@mcp.tool()
+def get_analysis_cache(
+    project_dir: str, scope: str, check_staleness: bool = True
+) -> dict:
+    """Look up cached analysis for a scope before re-analyzing.
+
+    Args:
+        project_dir: Project root directory path.
+        scope: Module/layer/feature name to look up (e.g. "auth", "api/routes").
+        check_staleness: Whether to check if cached data is stale via git/mtime.
+
+    Returns:
+        Dict with hit (bool), stale (bool), entry (cached data or None), stale_reason.
+    """
+    return _get_cache(project_dir, scope, check_staleness)
+
+
+@mcp.tool()
+def save_analysis_cache(
+    project_dir: str,
+    scope: str,
+    summary: str,
+    key_files: list[str] | None = None,
+    interfaces: list[str] | None = None,
+    known_issues: list[str] | None = None,
+    patterns: list[str] | None = None,
+    dependencies: list[str] | None = None,
+    cached_by_request: str = "",
+    extra: dict | None = None,
+) -> dict:
+    """Save analysis results for a scope to cache for future reuse.
+
+    Args:
+        project_dir: Project root directory path.
+        scope: Module/layer/feature name (e.g. "auth", "api/routes").
+        summary: Concise summary of what this scope does.
+        key_files: List of key file paths in this scope.
+        interfaces: Public interfaces / exports.
+        known_issues: Known issues or tech debt.
+        patterns: Design patterns used.
+        dependencies: Dependencies on other scopes.
+        cached_by_request: The user request that triggered this analysis.
+        extra: Additional structured data for future extensions.
+
+    Returns:
+        Dict with status and scope.
+    """
+    return _save_cache(
+        project_dir=project_dir,
+        scope=scope,
+        summary=summary,
+        key_files=key_files,
+        interfaces=interfaces,
+        known_issues=known_issues,
+        patterns=patterns,
+        dependencies=dependencies,
+        cached_by_request=cached_by_request,
+        extra=extra,
+    )
+
+
+@mcp.tool()
+def invalidate_analysis_cache(project_dir: str, scope: str) -> dict:
+    """Invalidate cached analysis for a scope after implementation changes it.
+
+    Args:
+        project_dir: Project root directory path.
+        scope: Module/layer/feature name to invalidate.
+
+    Returns:
+        Dict with status (invalidated/not_found) and scope.
+    """
+    return _invalidate_cache(project_dir, scope)
 
 
 def main():

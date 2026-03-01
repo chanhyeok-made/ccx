@@ -3,7 +3,7 @@ name: analyze
 description: "Analyze a request and produce structured requirements"
 disable-model-invocation: true
 argument-hint: "[request to analyze]"
-allowed-tools: Read, Grep, Glob, AskUserQuestion, mcp__ccx__load_project_context, mcp__ccx__get_session
+allowed-tools: Read, Grep, Glob, AskUserQuestion, mcp__ccx__load_project_context, mcp__ccx__get_session, mcp__ccx__get_analysis_cache, mcp__ccx__save_analysis_cache
 ---
 
 # Analyze Request
