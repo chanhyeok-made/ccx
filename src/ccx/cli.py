@@ -46,8 +46,8 @@ def init(project_dir: str, force: bool):
     # 2. Create/update .mcp.json
     _write_mcp_json(project, force)
 
-    # 3. Create base-context.yaml starter if not exists
-    _create_base_context_starter(project)
+    # 3. Create base-context.yaml by scanning project
+    _create_base_context_starter(project, force)
 
     # 4. Create .ccx/ directory
     ccx_dir = project / ".ccx"
@@ -144,11 +144,11 @@ def _write_mcp_json(project: Path, force: bool):
         click.echo("  Created .mcp.json")
 
 
-def _create_base_context_starter(project: Path):
+def _create_base_context_starter(project: Path, force: bool = False):
     """Create base-context.yaml by scanning the project."""
     target = project / "base-context.yaml"
-    if target.exists():
-        click.echo("  base-context.yaml already exists, skipping")
+    if target.exists() and not force:
+        click.echo("  base-context.yaml already exists, skipping (use --force to rescan)")
         return
 
     import yaml
