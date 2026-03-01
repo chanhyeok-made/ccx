@@ -6,6 +6,23 @@
 2. **Mandatory checkpoints**: You MUST get user confirmation with `AskUserQuestion` after Phase 2 (Analyze) and Phase 3 (Plan) before proceeding. Do NOT skip these.
 3. **Show your work**: When presenting analysis or plan, show the full details — not just a summary. The user needs enough information to make a decision.
 
+## IMPORTANT: Context Management
+
+All heavy work MUST run in subagents to protect the main context window.
+The main agent should only hold:
+- Project context (from MCP)
+- Analysis result (a few lines)
+- Task list (IDs + descriptions)
+- Per-task status (one line each: success/fail + summary)
+
+**Rules for subagent delegation:**
+- Research → `Agent(subagent_type: "Explore")` — returns a SHORT summary only
+- Implement → `Agent(subagent_type: "general-purpose")` — returns list of changed files + assumptions
+- Review → `Agent(subagent_type: "general-purpose")` — returns verdict + issues list
+- NEVER read file contents directly in the main agent during Phase 4
+- When passing research results to the implementation agent, include them in the agent PROMPT, not in the main context
+- After receiving a subagent result, extract only the essential summary and discard the rest mentally
+
 ---
 
 ## [Phase 1/6] Load Context
@@ -95,50 +112,54 @@ For each task (in dependency order), execute this loop:
 
 Output at start of each task: `### Executing T{N}: {description}`
 
-### Step 4a: Research (read-only)
+### Step 4a: Research (subagent — read-only)
 
-Use `Agent` with `subagent_type: "Explore"` to:
-- Find files relevant to the task
-- Understand the codebase structure in the task's scope
-- Map dependencies (imports/imported-by)
-- Identify the impact zone (what files could be affected by changes)
-
-The research agent should NOT modify any files.
-
-### Step 4b: Implement
-
-Use `Agent` with `subagent_type: "general-purpose"` to:
-- Implement the task using the research findings
-- Follow patterns shown in existing code
-- Respect ALL exception rules without exception
-- Produce minimal, focused changes
-- Report back: what files were changed, what assumptions were made
-
-The implementation agent prompt should include:
+Launch `Agent` with `subagent_type: "Explore"`. The prompt should include:
 - The task description
-- Relevant files and their contents (from research)
+- Project structure (from Phase 1 context)
 - Exception rules that apply
-- Dependency map
 
-### Step 4c: Review
+Ask the agent to return ONLY:
+- List of relevant file paths with one-line reasons
+- Key dependency relationships
+- Impact zone (files that could be affected)
 
-After implementation, review the changes inline:
+Do NOT ask it to return file contents — those will be read by the implementation agent directly.
 
-1. Read all modified files to verify correctness.
-2. Call `mcp__ccx__check_rules` with a description of the changes to verify exception rule compliance.
-3. Evaluate against these criteria (priority order):
-   - **CORRECTNESS**: Does the change achieve its stated intent?
-   - **SIDE EFFECTS**: Does it break anything in the impact zone?
-   - **RULES**: Does it respect all exception rules?
-   - **PATTERNS**: Does it follow existing code patterns?
-   - **EDGE CASES**: Are obvious edge cases handled?
+### Step 4b: Implement (subagent — read/write)
 
-4. If critical issues found:
-   - Fix them directly or delegate back to an implementation agent
-   - Re-review after fixes
-   - Maximum 3 retry attempts per task
+Launch `Agent` with `subagent_type: "general-purpose"`. The prompt should include:
+- The task description
+- Relevant file paths from research (the agent will read them itself)
+- Exception rules that apply
+- Dependency relationships from research
 
-5. Mark the task as completed with `TaskUpdate` when review passes.
+Ask the agent to:
+- Read the relevant files itself
+- Implement the changes
+- Return ONLY: list of changed files (path + type + intent) and any assumptions made
+
+### Step 4c: Review (subagent — read-only)
+
+Launch `Agent` with `subagent_type: "general-purpose"`. The prompt should include:
+- The task description
+- List of changed files from implementation
+- Exception rules
+- Impact zone from research
+- Instruction to call `mcp__ccx__check_rules` MCP tool
+
+Ask the agent to:
+- Read all modified files and verify correctness
+- Call `mcp__ccx__check_rules` with a description of changes
+- Evaluate: CORRECTNESS > SIDE EFFECTS > RULES > PATTERNS > EDGE CASES
+- Return ONLY: verdict (approve/reject/request_changes) + issues list
+
+**On reject or request_changes:**
+- Launch a new implementation subagent with the issues list
+- Re-review with a new review subagent
+- Maximum 3 retry attempts per task
+
+After review passes, mark the task as completed with `TaskUpdate`.
 
 Output after each task: `Task T{N} complete: {brief summary of changes}`
 
@@ -148,7 +169,7 @@ Output after each task: `Task T{N} complete: {brief summary of changes}`
 
 After all tasks are completed:
 
-1. Run `git diff` to see all changes.
+1. Run `git diff --stat` to see changed files (NOT full diff — keep context small).
 2. Generate a commit message following Conventional Commits:
    - Format: `type(scope): description`
    - Types: feat, fix, refactor, docs, test, chore
