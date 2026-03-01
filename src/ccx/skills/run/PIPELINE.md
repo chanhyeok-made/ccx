@@ -22,8 +22,16 @@ You are a **pure orchestrator**. You do NOT do any heavy thinking or file readin
 ## IMPORTANT: Progress & Confirmation Rules
 
 1. **Always show progress**: At the start of each phase, output a status line like `## [Phase N/6] Phase Name`.
-2. **Mandatory checkpoints**: You MUST get user confirmation with `AskUserQuestion` after Phase 2 (Analyze) and Phase 3 (Plan). Do NOT skip these.
+2. **Mandatory checkpoints**: You MUST get user confirmation with `AskUserQuestion` after Phase 1 (Analyze) and Phase 2 (Plan). Do NOT skip these.
 3. **Show your work**: Present analysis and plan in full detail so the user can make informed decisions.
+
+## CRITICAL: Handling Ambiguities and Empty Responses
+
+- **Empty or blank responses to AskUserQuestion = the user did NOT agree.** Do NOT treat silence as consent.
+- If the user gives an empty response at a checkpoint, ask again with a clearer question. If still empty, STOP the pipeline.
+- If the analyzer finds ambiguities, you MUST resolve ALL of them before proceeding. Present each ambiguity to the user with `AskUserQuestion` and wait for a real answer.
+- NEVER proceed with "best judgment" or "최선의 판단". If you don't have a clear answer, ask again or stop.
+- The only way to proceed past a checkpoint is the user explicitly selecting "Proceed" or giving an affirmative answer.
 
 ---
 
@@ -49,7 +57,13 @@ Launch `Agent` with `subagent_type: "general-purpose"`. Prompt:
 
 **Show the result to the user.**
 
-If ambiguities were listed, use `AskUserQuestion` to resolve them, then update the analysis.
+### >>> MANDATORY: Resolve Ambiguities First
+
+If the analyzer returned ANY ambiguities:
+1. Present EACH ambiguity to the user as a separate `AskUserQuestion`.
+2. Wait for a concrete answer to EACH one. Do NOT accept empty/blank answers.
+3. If the user gives an empty answer, re-ask: "I need your input on this to proceed correctly. [repeat the question]"
+4. After ALL ambiguities are resolved, re-run the analysis with the answers incorporated and show the updated result.
 
 ### >>> CHECKPOINT: Confirm Analysis
 
@@ -57,6 +71,7 @@ Use `AskUserQuestion`:
 - "Is this analysis correct?"
 - Options: "Proceed" / "Modify" / "Cancel"
 
+**Empty/blank response = ask again.** Do NOT proceed.
 If "Modify": ask what to change, update, re-confirm.
 If "Cancel": jump to Phase 5 (Record) with cancelled status.
 
@@ -95,6 +110,7 @@ Use `AskUserQuestion`:
 - "Should I proceed with this plan?"
 - Options: "Proceed" / "Modify" / "Cancel"
 
+**Empty/blank response = ask again.** Do NOT proceed.
 If "Modify": ask what to change, update tasks, re-confirm.
 If "Cancel": jump to Phase 5 (Record) with cancelled status.
 
