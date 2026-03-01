@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "llmanager"
+version = "0.2.0"
+description = "Claude Code native extension — project-aware development pipeline"
+authors = ["Your Name <you@example.com>"]
+packages = [{include = "llmanager", from = "src"}]
+include = ["llmanager/skills/**/*.md", "llmanager/base-context.example.yaml"]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+pyyaml = "^6.0"
+click = "^8.0"
+mcp = {version = ">=1.0", extras = ["cli"]}
+
+[tool.poetry.scripts]
+llm = "llmanager.cli:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
