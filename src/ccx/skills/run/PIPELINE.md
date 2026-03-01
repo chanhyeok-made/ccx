@@ -1,29 +1,56 @@
 # ccx Pipeline — Detailed Instructions
 
-## Phase 1: Load Context
+## IMPORTANT: Progress & Confirmation Rules
 
-1. Call `mcp__ccx__load_project_context` with the current project directory to get:
-   - project_name, stack, architecture, structure, exception_rules
-2. Call `mcp__ccx__get_session` with the current project directory to get:
-   - Previous execution history (for follow-up context)
+1. **Always show progress**: At the start of each phase, output a status line like `## [Phase N/6] Phase Name`. The user must be able to see where the pipeline is at all times.
+2. **Mandatory checkpoints**: You MUST get user confirmation with `AskUserQuestion` after Phase 2 (Analyze) and Phase 3 (Plan) before proceeding. Do NOT skip these.
+3. **Show your work**: When presenting analysis or plan, show the full details — not just a summary. The user needs enough information to make a decision.
+
+---
+
+## [Phase 1/6] Load Context
+
+1. Call `mcp__ccx__load_project_context` with the current project directory.
+2. Call `mcp__ccx__get_session` with the current project directory.
 3. Store these as context for all subsequent phases.
 
-## Phase 2: Analyze Request
+Output: `Context loaded: {project_name}, {stack summary}, {N} previous records`
+
+---
+
+## [Phase 2/6] Analyze Request
 
 Convert the user's raw request into structured requirements.
 
 **Rules:**
-- Do NOT assume anything ambiguous. If the request is unclear, use `AskUserQuestion` to clarify.
+- Do NOT assume anything ambiguous. If the request is unclear, use `AskUserQuestion` to clarify BEFORE producing the analysis.
 - Keep the intent to ONE sentence.
 - Scope should be module/layer/feature level, not file level.
+- If there is previous session context, incorporate it.
 
-**Produce mentally (do not output to user unless verbose):**
-- `intent`: One sentence summary of the goal
-- `scope`: Affected modules/layers/features
-- `constraints`: Any constraints mentioned or implied (include project exception_rules)
-- If there is previous session context, incorporate it (e.g., "add tests for the function created in the last request")
+**Output to user:**
 
-## Phase 3: Plan
+```
+## Analysis
+
+- **Intent**: [one sentence summary]
+- **Scope**: [list of affected modules/layers/features]
+- **Constraints**: [any constraints, including relevant exception rules]
+```
+
+### >>> CHECKPOINT: Confirm Analysis
+
+Use `AskUserQuestion` to ask the user:
+- "Is this analysis correct? Should I proceed with planning?"
+- Options: "Proceed" / "Modify" / "Cancel"
+
+If "Modify": ask what to change, update the analysis, and re-confirm.
+If "Cancel": stop the pipeline and record as cancelled.
+Only proceed to Phase 3 after user confirms.
+
+---
+
+## [Phase 3/6] Plan
 
 Decompose the analyzed requirements into executable tasks.
 
@@ -36,11 +63,37 @@ Decompose the analyzed requirements into executable tasks.
 **Actions:**
 1. Create tasks using `TaskCreate` for each planned task.
 2. Set up dependencies between tasks using `TaskUpdate` (addBlockedBy/addBlocks).
-3. Briefly show the user the task list with `TaskList`.
 
-## Phase 4: Execute Tasks
+**Output to user — show the full plan:**
+
+```
+## Execution Plan
+
+| # | Task | Target | Complexity | Depends On |
+|---|------|--------|------------|------------|
+| T1 | ... | ... | small/medium/large | - |
+| T2 | ... | ... | ... | T1 |
+
+Execution order: [T1] → [T2, T3] → [T4]
+```
+
+### >>> CHECKPOINT: Confirm Plan
+
+Use `AskUserQuestion` to ask the user:
+- "Should I proceed with this plan?"
+- Options: "Proceed" / "Modify" / "Cancel"
+
+If "Modify": ask what to change, update the tasks, and re-confirm.
+If "Cancel": stop the pipeline and record as cancelled.
+Only proceed to Phase 4 after user confirms.
+
+---
+
+## [Phase 4/6] Execute Tasks
 
 For each task (in dependency order), execute this loop:
+
+Output at start of each task: `### Executing T{N}: {description}`
 
 ### Step 4a: Research (read-only)
 
@@ -87,7 +140,11 @@ After implementation, review the changes inline:
 
 5. Mark the task as completed with `TaskUpdate` when review passes.
 
-## Phase 5: Commit
+Output after each task: `Task T{N} complete: {brief summary of changes}`
+
+---
+
+## [Phase 5/6] Commit & Push
 
 After all tasks are completed:
 
@@ -101,7 +158,9 @@ After all tasks are completed:
 4. If confirmed, create the commit.
 5. Push to the remote branch: `git push`.
 
-## Phase 6: Record
+---
+
+## [Phase 6/6] Record
 
 Call `mcp__ccx__record_execution` with:
 - `project_dir`: current project directory
@@ -109,6 +168,10 @@ Call `mcp__ccx__record_execution` with:
 - `success`: whether the pipeline succeeded
 - `summary`: brief summary of what was done
 - `changes`: list of file changes (each with path, type, intent)
+
+Output: `Pipeline complete. {summary}`
+
+---
 
 ## Error Handling
 
