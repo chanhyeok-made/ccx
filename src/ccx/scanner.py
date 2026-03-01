@@ -6,6 +6,8 @@ Auto-detects project stack, framework, and structure from filesystem.
 import json
 from pathlib import Path
 
+import pathspec
+
 # (marker file, runtime, common frameworks detected from deps)
 RUNTIME_MARKERS = [
     # Python
@@ -200,14 +202,35 @@ def _read_deps(root: Path, runtime: str) -> str:
     return "\n".join(parts)
 
 
+def _load_gitignore(root: Path) -> pathspec.PathSpec | None:
+    """Load .gitignore patterns from the project root."""
+    gitignore = root / ".gitignore"
+    if not gitignore.exists():
+        return None
+    try:
+        text = gitignore.read_text(encoding="utf-8", errors="ignore")
+        return pathspec.PathSpec.from_lines("gitwildmatch", text.splitlines())
+    except Exception:
+        return None
+
+
 def _generate_tree(root: Path, max_depth: int = 3) -> str:
     """Generate a directory tree string."""
+    spec = _load_gitignore(root)
     lines = []
-    _walk_tree(root, lines, prefix="", depth=0, max_depth=max_depth)
+    _walk_tree(root, lines, prefix="", depth=0, max_depth=max_depth, root=root, spec=spec)
     return "\n".join(lines)
 
 
-def _walk_tree(path: Path, lines: list, prefix: str, depth: int, max_depth: int):
+def _walk_tree(
+    path: Path,
+    lines: list,
+    prefix: str,
+    depth: int,
+    max_depth: int,
+    root: Path,
+    spec: pathspec.PathSpec | None,
+):
     """Recursive tree walker."""
     if depth > max_depth:
         return
@@ -218,19 +241,27 @@ def _walk_tree(path: Path, lines: list, prefix: str, depth: int, max_depth: int)
         return
 
     # Filter out ignored dirs and hidden files (except important ones)
-    entries = [
-        e for e in entries
-        if e.name not in IGNORE_DIRS
-        and not (e.name.startswith(".") and e.name not in {".github", ".env.example"})
-        and not e.name.endswith(".pyc")
-        and not e.name.endswith(".egg-info")
-    ]
+    filtered = []
+    for e in entries:
+        if e.name in IGNORE_DIRS:
+            continue
+        if e.name.startswith(".") and e.name not in {".github", ".env.example"}:
+            continue
+        if e.name.endswith(".pyc") or e.name.endswith(".egg-info"):
+            continue
+        if spec is not None:
+            rel = str(e.relative_to(root))
+            if e.is_dir():
+                rel += "/"
+            if spec.match_file(rel):
+                continue
+        filtered.append(e)
 
-    for i, entry in enumerate(entries):
-        is_last = i == len(entries) - 1
+    for i, entry in enumerate(filtered):
+        is_last = i == len(filtered) - 1
         connector = "└── " if is_last else "├── "
         lines.append(f"{prefix}{connector}{entry.name}{'/' if entry.is_dir() else ''}")
 
         if entry.is_dir():
             extension = "    " if is_last else "│   "
-            _walk_tree(entry, lines, prefix + extension, depth + 1, max_depth)
+            _walk_tree(entry, lines, prefix + extension, depth + 1, max_depth, root, spec)

@@ -11,6 +11,7 @@ python = "^3.11"
 pyyaml = "^6.0"
 click = "^8.0"
 mcp = {version = ">=1.0", extras = ["cli"]}
+pathspec = "^0.12"
 
 [tool.poetry.scripts]
 ccx = "ccx.cli:main"
