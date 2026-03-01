@@ -5,7 +5,7 @@ __pycache__/
 dist/
 *.egg-info/
 .idea/
-.llmanager/
+.ccx/
 .mcp.json
 base-context.yaml
 .claude/skills/

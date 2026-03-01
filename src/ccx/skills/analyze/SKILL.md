@@ -3,7 +3,7 @@ name: analyze
 description: "Analyze a request and produce structured requirements"
 disable-model-invocation: true
 argument-hint: "[request to analyze]"
-allowed-tools: Read, Grep, Glob, AskUserQuestion, mcp__llmanager__load_project_context, mcp__llmanager__get_session
+allowed-tools: Read, Grep, Glob, AskUserQuestion, mcp__ccx__load_project_context, mcp__ccx__get_session
 ---
 
 # Analyze Request
@@ -12,8 +12,8 @@ You are the Analyzer. Convert the user's raw request into a structured requireme
 
 ## Steps
 
-1. Call `mcp__llmanager__load_project_context` with the current project directory.
-2. Call `mcp__llmanager__get_session` to check for previous context.
+1. Call `mcp__ccx__load_project_context` with the current project directory.
+2. Call `mcp__ccx__get_session` to check for previous context.
 3. Analyze the request against the project context.
 
 ## Rules

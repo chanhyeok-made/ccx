@@ -1,10 +1,10 @@
-# llmanager Pipeline — Detailed Instructions
+# ccx Pipeline — Detailed Instructions
 
 ## Phase 1: Load Context
 
-1. Call `mcp__llmanager__load_project_context` with the current project directory to get:
+1. Call `mcp__ccx__load_project_context` with the current project directory to get:
    - project_name, stack, architecture, structure, exception_rules
-2. Call `mcp__llmanager__get_session` with the current project directory to get:
+2. Call `mcp__ccx__get_session` with the current project directory to get:
    - Previous execution history (for follow-up context)
 3. Store these as context for all subsequent phases.
 
@@ -72,7 +72,7 @@ The implementation agent prompt should include:
 After implementation, review the changes inline:
 
 1. Read all modified files to verify correctness.
-2. Call `mcp__llmanager__check_rules` with a description of the changes to verify exception rule compliance.
+2. Call `mcp__ccx__check_rules` with a description of the changes to verify exception rule compliance.
 3. Evaluate against these criteria (priority order):
    - **CORRECTNESS**: Does the change achieve its stated intent?
    - **SIDE EFFECTS**: Does it break anything in the impact zone?
@@ -102,7 +102,7 @@ After all tasks are completed:
 
 ## Phase 6: Record
 
-Call `mcp__llmanager__record_execution` with:
+Call `mcp__ccx__record_execution` with:
 - `project_dir`: current project directory
 - `request`: the original user request
 - `success`: whether the pipeline succeeded

@@ -1,10 +1,10 @@
 [tool.poetry]
-name = "llmanager"
+name = "ccx"
 version = "0.2.0"
-description = "Claude Code native extension — project-aware development pipeline"
+description = "Claude Code eXtension — project-aware development pipeline"
 authors = ["Your Name <you@example.com>"]
-packages = [{include = "llmanager", from = "src"}]
-include = ["llmanager/skills/**/*.md", "llmanager/base-context.example.yaml"]
+packages = [{include = "ccx", from = "src"}]
+include = ["ccx/skills/**/*.md", "ccx/base-context.example.yaml"]
 
 [tool.poetry.dependencies]
 python = "^3.11"
@@ -13,7 +13,7 @@ click = "^8.0"
 mcp = {version = ">=1.0", extras = ["cli"]}
 
 [tool.poetry.scripts]
-llm = "llmanager.cli:main"
+ccx = "ccx.cli:main"
 
 [build-system]
 requires = ["poetry-core"]

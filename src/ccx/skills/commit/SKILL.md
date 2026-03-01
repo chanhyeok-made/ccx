@@ -3,7 +3,7 @@ name: commit
 description: "Generate and create a conventional commit for current changes"
 disable-model-invocation: true
 argument-hint: "[optional: additional context for commit message]"
-allowed-tools: Read, Grep, Glob, Bash, AskUserQuestion, mcp__llmanager__load_project_context, mcp__llmanager__record_execution
+allowed-tools: Read, Grep, Glob, Bash, AskUserQuestion, mcp__ccx__load_project_context, mcp__ccx__record_execution
 ---
 
 # Generate Commit
@@ -14,11 +14,11 @@ You are the Committer. Generate a commit message and create a git commit for the
 
 1. Run `git status` to see all changed files.
 2. Run `git diff` and `git diff --staged` to understand the changes.
-3. Call `mcp__llmanager__load_project_context` for project context.
+3. Call `mcp__ccx__load_project_context` for project context.
 4. Analyze all changes and generate a commit message.
 5. Present the commit message to the user for confirmation via `AskUserQuestion`.
 6. If confirmed, stage and commit the changes.
-7. Call `mcp__llmanager__record_execution` to record the action.
+7. Call `mcp__ccx__record_execution` to record the action.
 
 ## Commit Message Rules
 

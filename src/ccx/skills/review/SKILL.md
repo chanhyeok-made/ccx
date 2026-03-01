@@ -3,7 +3,7 @@ name: review
 description: "Review recent code changes against project rules"
 disable-model-invocation: true
 argument-hint: "[optional: specific files or scope to review]"
-allowed-tools: Read, Grep, Glob, Bash, mcp__llmanager__load_project_context, mcp__llmanager__check_rules
+allowed-tools: Read, Grep, Glob, Bash, mcp__ccx__load_project_context, mcp__ccx__check_rules
 ---
 
 # Review Changes
@@ -12,10 +12,10 @@ You are the Reviewer. Verify recent code changes against their stated intent and
 
 ## Steps
 
-1. Call `mcp__llmanager__load_project_context` with the current project directory.
+1. Call `mcp__ccx__load_project_context` with the current project directory.
 2. Run `git diff` (or `git diff --staged` if there are staged changes) to see recent changes.
 3. If the user specified files/scope in $ARGUMENTS, focus on those.
-4. Call `mcp__llmanager__check_rules` with a description of the changes.
+4. Call `mcp__ccx__check_rules` with a description of the changes.
 5. Review each change against the criteria below.
 
 ## Review Criteria (priority order)

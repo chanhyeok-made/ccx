@@ -1,14 +1,14 @@
 """
-MCP Server for llmanager.
+MCP Server for ccx.
 Provides project context and session management tools to Claude Code.
 """
 
 from mcp.server.fastmcp import FastMCP
 
-from llmanager.config import load_base_context
-from llmanager.session import load_session, save_record, get_context_summary
+from ccx.config import load_base_context
+from ccx.session import load_session, save_record, get_context_summary
 
-mcp = FastMCP("llmanager")
+mcp = FastMCP("ccx")
 
 
 @mcp.tool()

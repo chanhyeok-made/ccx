@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-SESSION_DIR = ".llmanager"
+SESSION_DIR = ".ccx"
 SESSION_FILE = "session.json"
 MAX_RECORDS = 50
 

@@ -1,5 +1,5 @@
 """
-Setup CLI for llmanager.
+Setup CLI for ccx.
 Installs skills and MCP server configuration into target projects.
 """
 
@@ -14,18 +14,18 @@ SKILLS_SOURCE = Path(__file__).parent / "skills"
 
 MCP_CONFIG = {
     "mcpServers": {
-        "llmanager": {
+        "ccx": {
             "command": sys.executable,
-            "args": ["-m", "llmanager.mcp_server"],
+            "args": ["-m", "ccx.mcp_server"],
         }
     }
 }
 
 
 @click.group()
-@click.version_option(package_name="llmanager")
+@click.version_option(package_name="ccx")
 def cli():
-    """llmanager — Claude Code native extension setup tool."""
+    """ccx — Claude Code eXtension setup tool."""
     pass
 
 
@@ -33,9 +33,9 @@ def cli():
 @click.argument("project_dir", default=".", type=click.Path(exists=True))
 @click.option("--force", "-f", is_flag=True, help="Overwrite existing files")
 def init(project_dir: str, force: bool):
-    """Initialize llmanager in a project directory.
+    """Initialize ccx in a project directory.
 
-    Copies skill templates, creates .mcp.json, and sets up .llmanager/ directory.
+    Copies skill templates, creates .mcp.json, and sets up .ccx/ directory.
     """
     project = Path(project_dir).resolve()
 
@@ -49,14 +49,14 @@ def init(project_dir: str, force: bool):
     # 3. Create base-context.yaml starter if not exists
     _create_base_context_starter(project)
 
-    # 4. Create .llmanager/ directory
-    llmanager_dir = project / ".llmanager"
-    llmanager_dir.mkdir(exist_ok=True)
+    # 4. Create .ccx/ directory
+    ccx_dir = project / ".ccx"
+    ccx_dir.mkdir(exist_ok=True)
 
-    click.echo("\nllmanager initialized successfully!")
+    click.echo("\nccx initialized successfully!")
     click.echo(f"  Skills:       {skills_dest}")
     click.echo(f"  MCP config:   {project / '.mcp.json'}")
-    click.echo(f"  Session dir:  {llmanager_dir}")
+    click.echo(f"  Session dir:  {ccx_dir}")
     click.echo("\nNext steps:")
     click.echo("  1. Edit base-context.yaml to describe your project")
     click.echo("  2. Start Claude Code and use /project:run [request]")
@@ -75,7 +75,7 @@ def update(project_dir: str):
 @cli.command()
 @click.argument("project_dir", default=".", type=click.Path(exists=True))
 def status(project_dir: str):
-    """Check llmanager installation status."""
+    """Check ccx installation status."""
     project = Path(project_dir).resolve()
 
     checks = {
@@ -85,10 +85,10 @@ def status(project_dir: str):
         ".claude/skills/commit/SKILL.md": (project / ".claude" / "skills" / "commit" / "SKILL.md").exists(),
         ".mcp.json": (project / ".mcp.json").exists(),
         "base-context.yaml": (project / "base-context.yaml").exists(),
-        ".llmanager/": (project / ".llmanager").is_dir(),
+        ".ccx/": (project / ".ccx").is_dir(),
     }
 
-    click.echo(f"llmanager status for: {project}\n")
+    click.echo(f"ccx status for: {project}\n")
     all_ok = True
     for name, ok in checks.items():
         icon = "OK" if ok else "MISSING"
@@ -99,15 +99,14 @@ def status(project_dir: str):
     if all_ok:
         click.echo("\nAll components installed.")
     else:
-        click.echo("\nSome components missing. Run 'llm init' to set up.")
+        click.echo("\nSome components missing. Run 'ccx init' to set up.")
 
 
 def _copy_skills(dest: Path, force: bool):
     """Copy skill templates from package to project."""
     if not SKILLS_SOURCE.exists():
         click.echo(f"Warning: Skills source not found at {SKILLS_SOURCE}", err=True)
-        click.echo("Falling back to inline skill creation.", err=True)
-        _create_inline_skills(dest)
+        dest.mkdir(parents=True, exist_ok=True)
         return
 
     for skill_dir in SKILLS_SOURCE.iterdir():
@@ -126,28 +125,20 @@ def _copy_skills(dest: Path, force: bool):
                 click.echo(f"  Copied {skill_dir.name}/{f.name}")
 
 
-def _create_inline_skills(dest: Path):
-    """Fallback: create minimal skills if source templates not found (pip install case)."""
-    # This handles the case where skills/ isn't available (e.g., installed via pip)
-    dest.mkdir(parents=True, exist_ok=True)
-    click.echo("  Created minimal skill stubs. Run 'llm update' after installing from source.")
-
-
 def _write_mcp_json(project: Path, force: bool):
     """Create or merge .mcp.json."""
     mcp_path = project / ".mcp.json"
 
     if mcp_path.exists() and not force:
-        # Merge: add llmanager server to existing config
         existing = json.loads(mcp_path.read_text(encoding="utf-8"))
         servers = existing.get("mcpServers", {})
-        if "llmanager" in servers:
-            click.echo("  .mcp.json already has llmanager config, skipping")
+        if "ccx" in servers:
+            click.echo("  .mcp.json already has ccx config, skipping")
             return
-        servers["llmanager"] = MCP_CONFIG["mcpServers"]["llmanager"]
+        servers["ccx"] = MCP_CONFIG["mcpServers"]["ccx"]
         existing["mcpServers"] = servers
         mcp_path.write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
-        click.echo("  Merged llmanager into existing .mcp.json")
+        click.echo("  Merged ccx into existing .mcp.json")
     else:
         mcp_path.write_text(json.dumps(MCP_CONFIG, indent=2, ensure_ascii=False), encoding="utf-8")
         click.echo("  Created .mcp.json")
@@ -160,13 +151,11 @@ def _create_base_context_starter(project: Path):
         click.echo("  base-context.yaml already exists, skipping")
         return
 
-    # Copy example if available
     example = Path(__file__).parent / "base-context.example.yaml"
     if example.exists():
         shutil.copy2(example, target)
         click.echo("  Created base-context.yaml from example template")
     else:
-        # Create a minimal starter
         import yaml
         starter = {
             "project_name": project.name,
