@@ -34,6 +34,31 @@ class CacheEntry:
     extra: dict = field(default_factory=dict)
 
 
+def normalize_scope(scope: str) -> str:
+    """Normalize scope to a canonical file-path-based key.
+
+    Rules:
+    - Strip leading/trailing whitespace and slashes
+    - Use forward slashes
+    - Remove common file extensions (.py, .ts, .js, .go, .rs, .java, .md, .yaml, .yml, .json)
+    - Lowercase
+
+    Examples:
+        "src/ccx/mcp_server.py" → "src/ccx/mcp_server"
+        "src/ccx/Skills/" → "src/ccx/skills"
+        "Src\\CCX\\Config.py" → "src/ccx/config"
+    """
+    s = scope.strip().strip("/").strip("\\")
+    s = s.replace("\\", "/")
+    s = s.lower()
+    # Remove known extensions
+    for ext in (".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".md", ".yaml", ".yml", ".json", ".toml"):
+        if s.endswith(ext):
+            s = s[: -len(ext)]
+            break
+    return s.rstrip("/")
+
+
 def _cache_path(project_dir: str) -> Path:
     return Path(project_dir) / CACHE_DIR / CACHE_FILE
 
@@ -98,6 +123,7 @@ def get_analysis_cache(
 
     Returns: {hit: bool, stale: bool, entry: dict|None, stale_reason: str}
     """
+    scope = normalize_scope(scope)
     data = _load_cache(project_dir)
     entry = data.get(scope)
 
@@ -133,6 +159,7 @@ def save_analysis_cache(
 
     Returns: {status: str, scope: str}
     """
+    scope = normalize_scope(scope)
     data = _load_cache(project_dir)
 
     entry = CacheEntry(
@@ -167,6 +194,7 @@ def invalidate_cache(project_dir: str, scope: str) -> dict:
 
     Returns: {status: str, scope: str}
     """
+    scope = normalize_scope(scope)
     data = _load_cache(project_dir)
 
     if scope in data and scope != "_meta":

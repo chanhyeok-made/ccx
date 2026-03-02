@@ -55,6 +55,7 @@ round > 3 → CHECKPOINT("3회 시도 후에도 추가 맥락이 필요합니다
 ```
 
 **Analysis cache protocol:**
+- **Scope naming rule:** scope = project-root-relative file path, no extension, lowercase, forward slashes. Examples: `src/ccx/mcp_server.py` → `"src/ccx/mcp_server"`, `src/ccx/skills/` → `"src/ccx/skills"`. The server auto-normalizes, but subagents should follow this convention for clarity.
 - Before reading code, call `mcp__ccx__get_analysis_cache(project_dir, scope)` for each scope in the request.
 - `hit=true, stale=false` → use cached entry, skip reading code for that scope.
 - `hit=true, stale=true` → re-analyze only changed files (see `stale_reason`), then save updated cache.
