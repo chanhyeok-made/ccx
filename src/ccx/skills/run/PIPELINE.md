@@ -88,9 +88,18 @@ For each task in dependency order, output `### Executing T{N}: {description}`:
 > Do NOT use AskUserQuestion. Return results to the main agent.
 > Return: verdict (approve/reject/request_changes), issues, summary.
 
-If implementer returns non-trivial assumptions → present to user via AskUserQuestion with alternatives as options. Re-implement with confirmed choices if user disagrees.
+If implementer returns non-trivial assumptions → present to user via AskUserQuestion with alternatives as options before review.
 On reject/request_changes → re-implement with issues → re-review. Max 3 retries.
-After successful implementation, call `mcp__ccx__invalidate_analysis_cache("{project_dir}", scope)` for each scope affected by the changes.
+
+**3d. User checkpoint** — After review approves, show the user: changed files list + one-line summary per file + assumptions made.
+
+>>> CHECKPOINT("T{N} 구현 결과를 확인해주세요.\n\n{changed_files_summary}", "코드 확인", ["Approve", "Request changes", "Reject & redo"])
+
+- "Approve" → proceed.
+- "Request changes" → ask what to change (AskUserQuestion with options from context) → re-implement with user feedback → re-review → show again. Max 3 rounds.
+- "Reject & redo" → ask for new direction (AskUserQuestion) → restart from 3b with user's input.
+
+After user approves, call `mcp__ccx__invalidate_analysis_cache("{project_dir}", scope)` for each scope affected by the changes.
 Mark completed with `TaskUpdate`. Output: `Task T{N} complete: {summary}`
 
 ---
