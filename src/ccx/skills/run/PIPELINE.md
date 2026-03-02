@@ -14,6 +14,8 @@ You are a **pure orchestrator**. You hold only: `project_dir`, user request, ana
 
 **Checkpoint shorthand:** `>>> CHECKPOINT("질문", "header", ["Option1", "Option2", "Option3"])` means: call AskUserQuestion with those values. Each option label needs a description you generate from context. Standard checkpoint behavior: "Proceed" → next phase, "Modify" → ask what to change (with AskUserQuestion + options) then re-confirm, "Cancel" → record cancelled status → exit.
 
+**No-guess principle:** When the user's intent, target behavior, or design choice is unclear, subagents MUST NOT guess by referencing similar code. "Similar existing code" is a pattern reference, not a specification. Unclear → return as ambiguity/assumption → main agent asks the user. Every subagent prompt MUST include: `"If anything is unclear or has multiple valid interpretations, do NOT guess from similar code. Return it as an ambiguity."`
+
 **Ambiguity resolution:** Analyzer returns `{question, suggested_answers}` → map to AskUserQuestion questions array (max 4 per call). If suggested_answers < 2, add sensible options from context. Collect answers → re-launch analyzer with answers → show final result.
 
 **Analysis cache protocol:**
@@ -34,9 +36,9 @@ Launch `general-purpose` Agent:
 > - For each scope in the request, call `mcp__ccx__get_analysis_cache("{project_dir}", scope)` first.
 >   - Cache hit (not stale) → use cached summary, skip reading code for that scope.
 >   - Cache miss or stale → read code, analyze, then call `mcp__ccx__save_analysis_cache` to cache results.
-> - Ambiguous → list as `{question, suggested_answers: [opt1, opt2, ...]}`, do NOT assume.
+> - If anything is unclear or has multiple valid interpretations, do NOT guess from similar code. List as `{question, suggested_answers: [opt1, opt2, ...]}`.
 > - Intent: one sentence. Scope: module/layer level. Include session context.
-> - Do NOT use AskUserQuestion. Return questions to the main agent.
+> - Do NOT use AskUserQuestion. If anything is unclear, return it as an ambiguity.
 >
 > Return: Intent / Scope / Constraints / Ambiguities
 
@@ -75,9 +77,10 @@ For each task in dependency order, output `### Executing T{N}: {description}`:
 **3b. Implement** — Launch `general-purpose` Agent:
 > Task: {task_description}. Project dir: {project_dir}.
 > Files: {from research}. Impact zone: {from research}.
-> Call `mcp__ccx__load_project_context`. Read files, implement. Follow existing patterns.
+> Call `mcp__ccx__load_project_context`. Read files, implement. Follow existing code style and conventions.
+> If the task description does not specify a behavior, naming, or design choice, do NOT guess from similar code. Return it as an assumption with alternatives so the user can decide.
 > Do NOT use AskUserQuestion. Return results to the main agent.
-> Return: changed files (path, type, intent) + assumptions.
+> Return: changed files (path, type, intent) + assumptions (each: what you assumed, why, alternatives).
 
 **3c. Review** — Launch `general-purpose` Agent:
 > Task: {task_description}. Changed: {from implement}. Impact: {from research}. Project dir: {project_dir}.
@@ -85,6 +88,7 @@ For each task in dependency order, output `### Executing T{N}: {description}`:
 > Do NOT use AskUserQuestion. Return results to the main agent.
 > Return: verdict (approve/reject/request_changes), issues, summary.
 
+If implementer returns non-trivial assumptions → present to user via AskUserQuestion with alternatives as options. Re-implement with confirmed choices if user disagrees.
 On reject/request_changes → re-implement with issues → re-review. Max 3 retries.
 After successful implementation, call `mcp__ccx__invalidate_analysis_cache("{project_dir}", scope)` for each scope affected by the changes.
 Mark completed with `TaskUpdate`. Output: `Task T{N} complete: {summary}`
