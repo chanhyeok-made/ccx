@@ -14,9 +14,45 @@ You are a **pure orchestrator**. You hold only: `project_dir`, user request, ana
 
 **Checkpoint shorthand:** `>>> CHECKPOINT("질문", "header", ["Option1", "Option2", "Option3"])` means: call AskUserQuestion with those values. Each option label needs a description you generate from context. Standard checkpoint behavior: "Proceed" → next phase, "Modify" → ask what to change (with AskUserQuestion + options) then re-confirm, "Cancel" → record cancelled status → exit.
 
-**No-guess principle:** When the user's intent, target behavior, or design choice is unclear, subagents MUST NOT guess by referencing similar code. "Similar existing code" is a pattern reference, not a specification. Unclear → return as ambiguity/assumption → main agent asks the user. Every subagent prompt MUST include: `"If anything is unclear or has multiple valid interpretations, do NOT guess from similar code. Return it as an ambiguity."`
+**No-guess principle:** When the user's intent, target behavior, or design choice is unclear, subagents MUST NOT guess by referencing similar code. "Similar existing code" is a pattern reference, not a specification. Blocking unknowns (what to build) → use `NEEDS_CONTEXT`. Non-blocking defaults (how to build) → use `ASSUMPTIONS` section. See subagent response protocol below.
 
-**Ambiguity resolution:** Analyzer returns `{question, suggested_answers}` → map to AskUserQuestion questions array (max 4 per call). If suggested_answers < 2, add sensible options from context. Collect answers → re-launch analyzer with answers → show final result.
+**Subagent response protocol:** Every subagent MUST end its response with one of two formats:
+
+FORMAT A — Complete:
+```
+=== STATUS: COMPLETE ===
+[phase-specific results]
+=== ASSUMPTIONS (if any) ===
+1. [assumption] — reason — alternatives: [opt1, opt2]
+=== END ===
+```
+
+FORMAT B — Needs additional context:
+```
+=== STATUS: NEEDS_CONTEXT ===
+=== PARTIAL ===
+[work done so far]
+=== QUESTIONS ===
+1. {question: "...", suggested_answers: ["a", "b", "c"]}
+=== END ===
+```
+
+Decision guide for subagents:
+- **NEEDS_CONTEXT**: The answer changes *what* to build (different behavior, API, data model). Cannot proceed without it.
+- **COMPLETE + ASSUMPTIONS**: The answer changes *how* to build (implementation detail). Pick a reasonable default and explain.
+
+**Main agent handling loop:** Apply to every subagent launch:
+```
+context = {task, phase_inputs}
+for round in 1..3:
+    result = launch_subagent(prompt + context)
+    if COMPLETE → break
+    if NEEDS_CONTEXT →
+        questions → AskUserQuestion (suggested_answers → options)
+        context += {partial, user_answers}
+    if no STATUS marker → treat as COMPLETE, break
+round > 3 → CHECKPOINT("3회 시도 후에도 추가 맥락이 필요합니다.", "루프 초과", ["부분 결과로 진행", "추가 입력 제공", "취소"])
+```
 
 **Analysis cache protocol:**
 - Before reading code, call `mcp__ccx__get_analysis_cache(project_dir, scope)` for each scope in the request.
@@ -36,13 +72,12 @@ Launch `general-purpose` Agent:
 > - For each scope in the request, call `mcp__ccx__get_analysis_cache("{project_dir}", scope)` first.
 >   - Cache hit (not stale) → use cached summary, skip reading code for that scope.
 >   - Cache miss or stale → read code, analyze, then call `mcp__ccx__save_analysis_cache` to cache results.
-> - If anything is unclear or has multiple valid interpretations, do NOT guess from similar code. List as `{question, suggested_answers: [opt1, opt2, ...]}`.
 > - Intent: one sentence. Scope: module/layer level. Include session context.
-> - Do NOT use AskUserQuestion. If anything is unclear, return it as an ambiguity.
+> - Do NOT use AskUserQuestion. Follow the subagent response protocol (STATUS: COMPLETE or NEEDS_CONTEXT).
 >
-> Return: Intent / Scope / Constraints / Ambiguities
+> Return: Intent / Scope / Constraints (use STATUS format)
 
-Show result. Resolve ambiguities if any (see protocol above).
+Handle per main agent handling loop. Show final result.
 
 >>> CHECKPOINT("분석 결과가 맞나요?", "분석 확인", ["Proceed", "Modify", "Cancel"])
 
@@ -55,11 +90,11 @@ Launch `general-purpose` Agent:
 > You are a Planner. Call `mcp__ccx__load_project_context("{project_dir}")`.
 > Analysis: Intent={intent}, Scope={scope}, Constraints={constraints}
 > - Each task: independently implementable, one logical change, explicit dependencies.
-> - Do NOT use AskUserQuestion. Return results to the main agent.
+> - Do NOT use AskUserQuestion. Follow the subagent response protocol (STATUS: COMPLETE or NEEDS_CONTEXT).
 >
-> Return: table (# / Task / Target modules / Complexity / Depends On) + execution order
+> Return: table (# / Task / Target modules / Complexity / Depends On) + execution order (use STATUS format)
 
-Show plan. Create tasks with `TaskCreate`, set dependencies with `TaskUpdate`.
+Handle per main agent handling loop. Show plan. Create tasks with `TaskCreate`, set dependencies with `TaskUpdate`.
 
 >>> CHECKPOINT("이 계획대로 진행할까요?", "계획 확인", ["Proceed", "Modify", "Cancel"])
 
@@ -71,24 +106,28 @@ For each task in dependency order, output `### Executing T{N}: {description}`:
 
 **3a. Research** — Launch `Explore` Agent:
 > Task: {task_description}. Project dir: {project_dir}.
-> Find relevant files. Do NOT use AskUserQuestion. Return results to the main agent.
-> Return: file paths + reasons, dependency relationships, impact zone. No file contents.
+> Find relevant files. Do NOT use AskUserQuestion. Follow the subagent response protocol (STATUS: COMPLETE or NEEDS_CONTEXT).
+> Return: file paths + reasons, dependency relationships, impact zone. No file contents. (use STATUS format)
+
+Handle per main agent handling loop.
 
 **3b. Implement** — Launch `general-purpose` Agent:
 > Task: {task_description}. Project dir: {project_dir}.
 > Files: {from research}. Impact zone: {from research}.
 > Call `mcp__ccx__load_project_context`. Read files, implement. Follow existing code style and conventions.
-> If the task description does not specify a behavior, naming, or design choice, do NOT guess from similar code. Return it as an assumption with alternatives so the user can decide.
-> Do NOT use AskUserQuestion. Return results to the main agent.
-> Return: changed files (path, type, intent) + assumptions (each: what you assumed, why, alternatives).
+> For blocking decisions (what to build) use NEEDS_CONTEXT. For non-blocking defaults (how to build) use ASSUMPTIONS section.
+> Do NOT use AskUserQuestion. Follow the subagent response protocol (STATUS: COMPLETE or NEEDS_CONTEXT).
+> Return: changed files (path, type, intent) (use STATUS format).
+
+Handle per main agent handling loop.
 
 **3c. Review** — Launch `general-purpose` Agent:
 > Task: {task_description}. Changed: {from implement}. Impact: {from research}. Project dir: {project_dir}.
 > Call `mcp__ccx__check_rules`. Verify: correctness, side effects, rules, patterns, edge cases.
-> Do NOT use AskUserQuestion. Return results to the main agent.
-> Return: verdict (approve/reject/request_changes), issues, summary.
+> Do NOT use AskUserQuestion. Follow the subagent response protocol (STATUS: COMPLETE or NEEDS_CONTEXT).
+> Return: verdict (approve/reject/request_changes), issues, summary. (use STATUS format)
 
-If implementer returns non-trivial assumptions → present to user via AskUserQuestion with alternatives as options before review.
+Handle per main agent handling loop. If implementer returned COMPLETE with non-trivial assumptions → present to user via AskUserQuestion with alternatives as options before review.
 On reject/request_changes → re-implement with issues → re-review. Max 3 retries.
 
 **3d. User checkpoint** — After review approves, show the user: changed files list + one-line summary per file + assumptions made.
