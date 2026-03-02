@@ -113,7 +113,7 @@ def get_analysis_cache(
 
     Args:
         project_dir: Project root directory path.
-        scope: Module/layer/feature name to look up (e.g. "auth", "api/routes").
+        scope: File-path-based scope key (e.g. "src/ccx/mcp_server", "src/api/routes"). Auto-normalized: lowercase, no extension, forward slashes.
         check_staleness: Whether to check if cached data is stale via git/mtime.
 
     Returns:
@@ -139,7 +139,7 @@ def save_analysis_cache(
 
     Args:
         project_dir: Project root directory path.
-        scope: Module/layer/feature name (e.g. "auth", "api/routes").
+        scope: File-path-based scope key (e.g. "src/ccx/mcp_server", "src/api/routes"). Auto-normalized.
         summary: Concise summary of what this scope does.
         key_files: List of key file paths in this scope.
         interfaces: Public interfaces / exports.
@@ -172,7 +172,7 @@ def invalidate_analysis_cache(project_dir: str, scope: str) -> dict:
 
     Args:
         project_dir: Project root directory path.
-        scope: Module/layer/feature name to invalidate.
+        scope: File-path-based scope key to invalidate (e.g. "src/ccx/mcp_server"). Auto-normalized.
 
     Returns:
         Dict with status (invalidated/not_found) and scope.

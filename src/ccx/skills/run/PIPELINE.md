@@ -74,9 +74,28 @@ Launch `general-purpose` Agent:
 >   - Cache hit (not stale) → use cached summary, skip reading code for that scope.
 >   - Cache miss or stale → read code, analyze, then call `mcp__ccx__save_analysis_cache` to cache results.
 > - Intent: one sentence. Scope: module/layer level. Include session context.
-> - Do NOT use AskUserQuestion. Follow the subagent response protocol (STATUS: COMPLETE or NEEDS_CONTEXT).
+> - Do NOT use AskUserQuestion. Return results to the main agent.
 >
-> Return: Intent / Scope / Constraints (use STATUS format)
+> **Response format — you MUST end your response with one of:**
+> ```
+> === STATUS: COMPLETE ===
+> Intent: ...
+> Scope: ...
+> Constraints: ...
+> === ASSUMPTIONS (if any) ===
+> 1. [assumption] — reason — alternatives: [opt1, opt2]
+> === END ===
+> ```
+> OR if you cannot proceed without user input:
+> ```
+> === STATUS: NEEDS_CONTEXT ===
+> === PARTIAL ===
+> [analysis done so far]
+> === QUESTIONS ===
+> 1. {question: "...", suggested_answers: ["a", "b", "c"]}
+> === END ===
+> ```
+> Use NEEDS_CONTEXT only when the answer changes *what* to build. Use ASSUMPTIONS for *how* to build.
 
 Handle per main agent handling loop. Show final result.
 
@@ -91,9 +110,28 @@ Launch `general-purpose` Agent:
 > You are a Planner. Call `mcp__ccx__load_project_context("{project_dir}")`.
 > Analysis: Intent={intent}, Scope={scope}, Constraints={constraints}
 > - Each task: independently implementable, one logical change, explicit dependencies.
-> - Do NOT use AskUserQuestion. Follow the subagent response protocol (STATUS: COMPLETE or NEEDS_CONTEXT).
+> - Do NOT use AskUserQuestion. Return results to the main agent.
 >
-> Return: table (# / Task / Target modules / Complexity / Depends On) + execution order (use STATUS format)
+> **Response format — you MUST end your response with one of:**
+> ```
+> === STATUS: COMPLETE ===
+> | # | Task | Target modules | Complexity | Depends On |
+> ...
+> Execution order: ...
+> === ASSUMPTIONS (if any) ===
+> 1. [assumption] — reason — alternatives: [opt1, opt2]
+> === END ===
+> ```
+> OR if you cannot proceed without user input:
+> ```
+> === STATUS: NEEDS_CONTEXT ===
+> === PARTIAL ===
+> [planning done so far]
+> === QUESTIONS ===
+> 1. {question: "...", suggested_answers: ["a", "b", "c"]}
+> === END ===
+> ```
+> Use NEEDS_CONTEXT only when the answer changes *what* to build. Use ASSUMPTIONS for *how* to build.
 
 Handle per main agent handling loop. Show plan. Create tasks with `TaskCreate`, set dependencies with `TaskUpdate`.
 
@@ -107,8 +145,25 @@ For each task in dependency order, output `### Executing T{N}: {description}`:
 
 **3a. Research** — Launch `Explore` Agent:
 > Task: {task_description}. Project dir: {project_dir}.
-> Find relevant files. Do NOT use AskUserQuestion. Follow the subagent response protocol (STATUS: COMPLETE or NEEDS_CONTEXT).
-> Return: file paths + reasons, dependency relationships, impact zone. No file contents. (use STATUS format)
+> Find relevant files. Do NOT use AskUserQuestion. Return results to the main agent.
+>
+> **Response format — you MUST end your response with one of:**
+> ```
+> === STATUS: COMPLETE ===
+> Files: [path — reason, ...]
+> Dependencies: ...
+> Impact zone: ...
+> === END ===
+> ```
+> OR if you cannot proceed:
+> ```
+> === STATUS: NEEDS_CONTEXT ===
+> === PARTIAL ===
+> [research done so far]
+> === QUESTIONS ===
+> 1. {question: "...", suggested_answers: ["a", "b", "c"]}
+> === END ===
+> ```
 
 Handle per main agent handling loop.
 
@@ -116,17 +171,52 @@ Handle per main agent handling loop.
 > Task: {task_description}. Project dir: {project_dir}.
 > Files: {from research}. Impact zone: {from research}.
 > Call `mcp__ccx__load_project_context`. Read files, implement. Follow existing code style and conventions.
-> For blocking decisions (what to build) use NEEDS_CONTEXT. For non-blocking defaults (how to build) use ASSUMPTIONS section.
-> Do NOT use AskUserQuestion. Follow the subagent response protocol (STATUS: COMPLETE or NEEDS_CONTEXT).
-> Return: changed files (path, type, intent) (use STATUS format).
+> Do NOT use AskUserQuestion. Return results to the main agent.
+>
+> **Response format — you MUST end your response with one of:**
+> ```
+> === STATUS: COMPLETE ===
+> Changed files:
+> - path (type): intent
+> === ASSUMPTIONS (if any) ===
+> 1. [assumption] — reason — alternatives: [opt1, opt2]
+> === END ===
+> ```
+> OR if a decision blocks implementation (changes *what* to build):
+> ```
+> === STATUS: NEEDS_CONTEXT ===
+> === PARTIAL ===
+> [implementation done so far]
+> === QUESTIONS ===
+> 1. {question: "...", suggested_answers: ["a", "b", "c"]}
+> === END ===
+> ```
+> Use NEEDS_CONTEXT for blocking unknowns (what to build). Use ASSUMPTIONS for non-blocking defaults (how to build).
 
 Handle per main agent handling loop.
 
 **3c. Review** — Launch `general-purpose` Agent:
 > Task: {task_description}. Changed: {from implement}. Impact: {from research}. Project dir: {project_dir}.
 > Call `mcp__ccx__check_rules`. Verify: correctness, side effects, rules, patterns, edge cases.
-> Do NOT use AskUserQuestion. Follow the subagent response protocol (STATUS: COMPLETE or NEEDS_CONTEXT).
-> Return: verdict (approve/reject/request_changes), issues, summary. (use STATUS format)
+> Do NOT use AskUserQuestion. Return results to the main agent.
+>
+> **Response format — you MUST end your response with one of:**
+> ```
+> === STATUS: COMPLETE ===
+> Verdict: approve | reject | request_changes
+> Issues: ...
+> Summary: ...
+> === END ===
+> ```
+> OR if you need clarification to complete the review:
+> ```
+> === STATUS: NEEDS_CONTEXT ===
+> === PARTIAL ===
+> [review done so far]
+> === QUESTIONS ===
+> 1. {question: "...", suggested_answers: ["a", "b", "c"]}
+> === END ===
+> ```
 
 Handle per main agent handling loop. If implementer returned COMPLETE with non-trivial assumptions → present to user via AskUserQuestion with alternatives as options before review.
 On reject/request_changes → re-implement with issues → re-review. Max 3 retries.

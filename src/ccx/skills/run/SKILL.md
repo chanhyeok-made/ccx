@@ -3,7 +3,7 @@ name: run
 description: "Full development pipeline: analyze -> plan -> implement -> review -> commit"
 disable-model-invocation: true
 argument-hint: "[request description]"
-allowed-tools: Bash, Agent, TaskCreate, TaskUpdate, TaskList, TaskGet, AskUserQuestion, mcp__ccx__record_execution, mcp__ccx__invalidate_analysis_cache
+allowed-tools: Read, Bash, Agent, TaskCreate, TaskUpdate, TaskList, TaskGet, AskUserQuestion, mcp__ccx__record_execution, mcp__ccx__invalidate_analysis_cache
 ---
 
 # Full Development Pipeline
@@ -14,12 +14,12 @@ Read the PIPELINE.md file in this skill's directory for detailed instructions, t
 
 ## Quick Reference
 
-1. **Analyze** (subagent): parse request, load context via MCP, return structured analysis
-2. **Plan** (subagent): decompose into tasks, load context via MCP
-3. **Execute**: per task — Research (Explore subagent) → Implement (general-purpose subagent) → Review (general-purpose subagent)
-4. **Commit & Push**: git commit + push
-5. **Record**: MCP `record_execution`
+1. **Analyze** (subagent) → structured analysis → CHECKPOINT
+2. **Plan** (subagent) → task decomposition → CHECKPOINT
+3. **Execute** (per task): Research → Implement → Review → CHECKPOINT
+4. **Commit & Push** → conventional commit → CHECKPOINT
+5. **Record** → `mcp__ccx__record_execution`
 
-Checkpoints: confirm with user after Analyze and Plan.
+All subagent responses use STATUS format (COMPLETE / NEEDS_CONTEXT). Handle per main agent handling loop (see PIPELINE.md Rules).
 
 The user's request is: $ARGUMENTS
