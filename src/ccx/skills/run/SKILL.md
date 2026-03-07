@@ -3,7 +3,7 @@ name: run
 description: "Full development pipeline: analyze -> plan -> implement -> review -> commit"
 disable-model-invocation: true
 argument-hint: "[request description]"
-allowed-tools: Read, Bash, Agent, TaskCreate, TaskUpdate, TaskList, TaskGet, AskUserQuestion, mcp__ccx__record_execution, mcp__ccx__invalidate_analysis_cache, mcp__ccx__trigger_index, mcp__ccx__mark_stale_cascade, mcp__ccx__list_cached_scopes, mcp__ccx__get_scope_with_children
+allowed-tools: Read, Bash, Agent, Skill, TaskCreate, TaskUpdate, TaskList, TaskGet, AskUserQuestion, mcp__ccx__record_execution, mcp__ccx__invalidate_analysis_cache, mcp__ccx__trigger_index, mcp__ccx__mark_stale_cascade, mcp__ccx__list_cached_scopes, mcp__ccx__get_scope_with_children
 ---
 
 # Full Development Pipeline
@@ -14,6 +14,7 @@ Read the PIPELINE.md file in this skill's directory for detailed instructions, t
 
 ## Quick Reference
 
+0. **Index** (optional) → warm analysis cache if stale/new scopes exist
 1. **Analyze** (subagent) → structured analysis → CHECKPOINT
 2. **Plan** (subagent) → task decomposition → CHECKPOINT
 3. **Execute** (per task): Research → Implement → Review → CHECKPOINT
