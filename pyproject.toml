@@ -4,7 +4,7 @@ version = "0.2.0"
 description = "Claude Code eXtension — project-aware development pipeline"
 authors = ["Your Name <you@example.com>"]
 packages = [{include = "ccx", from = "src"}]
-include = ["ccx/skills/**/*.md", "ccx/base-context.example.yaml", "ccx/hooks/**/*.sh"]
+include = ["ccx/skills/**/*.md", "ccx/base-context.example.yaml", "ccx/hooks/**/*.sh", "ccx/hooks/**/*.py"]
 
 [tool.poetry.dependencies]
 python = "^3.11"

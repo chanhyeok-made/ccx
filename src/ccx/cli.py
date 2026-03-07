@@ -129,6 +129,7 @@ def status(project_dir: str):
         ".claude/skills/commit/SKILL.md": (project / ".claude" / "skills" / "commit" / "SKILL.md").exists(),
         ".claude/skills/index/SKILL.md": (project / ".claude" / "skills" / "index" / "SKILL.md").exists(),
         ".claude/hooks/log_event.sh": (project / ".claude" / "hooks" / "log_event.sh").exists(),
+        ".claude/hooks/log_event.py": (project / ".claude" / "hooks" / "log_event.py").exists(),
         ".mcp.json": (project / ".mcp.json").exists(),
         "base-context.yaml": (project / "base-context.yaml").exists(),
         ".ccx/": (project / ".ccx").is_dir(),
