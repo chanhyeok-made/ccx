@@ -6,6 +6,7 @@ Installs skills and MCP server configuration into target projects.
 import json
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -13,6 +14,7 @@ import click
 
 SKILLS_SOURCE = Path(__file__).parent / "skills"
 HOOKS_SOURCE = Path(__file__).parent / "hooks"
+GIT_REPO_URL = "git+https://github.com/chanhyeok-made/ccx.git"
 
 MCP_CONFIG = {
     "mcpServers": {
@@ -59,10 +61,7 @@ def init(project_dir: str, force: bool):
     _create_base_context_starter(project, force)
 
     # 6. Create .ccx/ directory and logs subdirectory
-    ccx_dir = project / ".ccx"
-    ccx_dir.mkdir(exist_ok=True)
-    logs_dir = ccx_dir / "logs"
-    logs_dir.mkdir(exist_ok=True)
+    ccx_dir = _ensure_ccx_directory(project)
 
     click.echo("\nccx initialized successfully!")
     click.echo(f"  Skills:       {skills_dest}")
@@ -76,15 +75,45 @@ def init(project_dir: str, force: bool):
 
 @cli.command()
 @click.argument("project_dir", default=".", type=click.Path(exists=True))
-def update(project_dir: str):
-    """Update skill templates and hooks to latest version."""
+@click.option("--post-upgrade", is_flag=True, hidden=True,
+              help="Internal flag: run setup phase after package upgrade.")
+def update(project_dir: str, post_upgrade: bool):
+    """Upgrade ccx package to latest version and update project configuration."""
     project = Path(project_dir).resolve()
+
+    if not post_upgrade:
+        from ccx import __version__ as current_version
+        click.echo(f"Current version: {current_version}")
+        click.echo("Upgrading ccx package...")
+
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install",
+                 "--no-cache-dir", "--force-reinstall", "-q",
+                 GIT_REPO_URL],
+                check=True, capture_output=True, text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            click.echo(f"Package upgrade failed:\n{e.stderr}", err=True)
+            sys.exit(1)
+
+        click.echo("Applying updates...")
+        os.execv(sys.executable, [
+            sys.executable, "-m", "ccx.cli",
+            "update", "--post-upgrade", str(project),
+        ])
+
+    # Post-upgrade phase: runs with new code after re-exec
     skills_dest = project / ".claude" / "skills"
     _copy_skills(skills_dest, force=True)
     hooks_dest = project / ".claude" / "hooks"
     _copy_hooks(hooks_dest, force=True)
     _write_hook_settings(project, force=True)
-    click.echo("Skills and hooks updated successfully!")
+    _write_mcp_json(project, force=False)
+    _ensure_ccx_directory(project)
+
+    from ccx import __version__
+    click.echo(f"\nccx updated to version {__version__}!")
 
 
 @cli.command()
@@ -179,6 +208,14 @@ def index(project_dir: str, reset: bool, verbose: bool):
                 click.echo(f"    ├── {child}")
 
     click.echo("\nDone. Run '/project:run' or '/project:analyze' to trigger code-level analysis.")
+
+
+def _ensure_ccx_directory(project: Path):
+    """Ensure .ccx/ and .ccx/logs/ directories exist."""
+    ccx_dir = project / ".ccx"
+    ccx_dir.mkdir(exist_ok=True)
+    (ccx_dir / "logs").mkdir(exist_ok=True)
+    return ccx_dir
 
 
 def _copy_skills(dest: Path, force: bool):
