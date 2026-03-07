@@ -1,164 +1,154 @@
-# Agent Orchestrator — Setup & Usage
+# ccx -- Setup & Usage
+
+## What is ccx
+
+ccx (Claude Code eXtension) is a Claude Code native extension that provides a project-aware development pipeline through Skills and an MCP Server. Claude Code acts as the orchestrator; ccx supplies the skills (pipeline logic) and MCP tools (project context, session, analysis cache) that subagents consume.
 
 ## Prerequisites
 
-1. **Python 3.11+**
-2. **Claude Code CLI** installed and authenticated
-   ```bash
-   npm install -g @anthropic-ai/claude-code
-   ```
-3. **Anthropic API key** set as environment variable
-   ```bash
-   export ANTHROPIC_API_KEY="sk-ant-..."
-   ```
+- **Python 3.11+**
+- **Claude Code CLI** installed and authenticated
+  ```bash
+  npm install -g @anthropic-ai/claude-code
+  ```
 
-## Install
+## Installation
+
+With pip (editable install):
 
 ```bash
-cd agent-orchestrator
-pip install -r requirements.txt
+cd llmanager
+pip install -e .
 ```
 
-## Setup Base Context
+Or with Poetry:
 
-1. Copy the example to your project root:
-   ```bash
-   cp base-context.example.yaml /path/to/your/project/base-context.yaml
-   ```
-
-2. Edit it — remember the principle: **일반적인 것은 빼고, 예외만 넣어라**
-
-## Usage
-
-### Basic
 ```bash
-python main.py "유저 프로필에 최근 활동 내역 추가해줘" -p /path/to/project
+cd llmanager
+poetry install
 ```
 
-### Dry Run (plan only, no code changes)
+Both methods install the `ccx` CLI command (entry point: `ccx.cli:main`).
+
+## Quick Start
+
 ```bash
-python main.py "인증 로직 리팩토링" -p /path/to/project --dry-run
+# 1. Initialize ccx in your project
+ccx init /path/to/your/project
+
+# 2. (Optional) Review the auto-generated base-context.yaml
+#    Edit it to add project-specific exception rules or architecture notes.
+
+# 3. Start Claude Code in your project and run the pipeline
+cd /path/to/your/project
+claude
+# Then use: /project:run [your request]
 ```
 
-### Verbose (see all agent outputs)
-```bash
-python main.py "API 에러 핸들링 통합" -p /path/to/project --verbose
-```
+`ccx init` performs the following:
+- Copies skill templates to `.claude/skills/`
+- Copies hook scripts to `.claude/hooks/`
+- Configures hooks in `.claude/settings.json`
+- Creates `.mcp.json` with the ccx MCP server config
+- Scans the project and generates `base-context.yaml`
+- Creates the `.ccx/` directory (session data, logs, analysis cache)
 
-### Custom model
-```bash
-python main.py "검색 기능 추가" -p /path/to/project --model claude-opus-4-20250514
-```
+## CLI Commands
 
-### Interactive mode
-```bash
-python main.py -p /path/to/project
-# Then type your request
-```
+| Command | Description | Key Flags |
+|---------|-------------|-----------|
+| `ccx init [project_dir]` | Initialize ccx in a project directory | `--force / -f` -- overwrite existing files |
+| `ccx update [project_dir]` | Update skill templates and hooks to latest version | -- |
+| `ccx status [project_dir]` | Check ccx installation status (skills, hooks, MCP config, base-context) | -- |
+| `ccx index [project_dir]` | Discover and index project scopes for analysis caching | `--reset` -- clear cache before indexing; `--verbose / -v` -- show scope tree |
 
-## Pipeline Flow
+`project_dir` defaults to `.` (current directory) for all commands.
 
-```
-$ python main.py "유저 프로필에 최근 활동 내역 추가해줘" -p ~/my-project
+## Skills
 
-🚀 Starting pipeline for: "유저 프로필에 최근 활동 내역 추가해줘"
+Skills are invoked inside Claude Code with the `/project:` prefix.
 
-──────────────────────────────────────────────────
-  [1/6] 🤖 Analyzer: Parsing request...
-──────────────────────────────────────────────────
+| Skill | Description |
+|-------|-------------|
+| `/project:run [request]` | Full development pipeline: analyze, plan, implement, review, commit. Orchestrates subagents through all phases with mandatory checkpoints. |
+| `/project:analyze [request]` | Standalone analysis: analyze a request and produce structured requirements. |
+| `/project:review [files or scope]` | Review recent code changes against project exception rules. |
+| `/project:commit [context]` | Generate and create a conventional commit for current changes. |
+| `/project:index [--force]` | Perform code-level analysis on all project scopes and cache results. Incremental by default; `--force` re-analyzes everything. |
 
-❓ Clarification needed:
+## MCP Tools
 
-  1. 최근 활동의 범위는? [default: 최근 20건]
-     > (enter to use default)
+The ccx MCP server (`ccx.mcp_server`) exposes the following tools:
 
-──────────────────────────────────────────────────
-  [2/6] 🤖 Planner: Decomposing tasks...
-──────────────────────────────────────────────────
-
-📦 Execution group 1/2: ["T1", "T2"]
-
-──────────────────────────────────────────────────
-  [3/6] 🤖 Researcher: [T1] Finding relevant files...
-──────────────────────────────────────────────────
-
-──────────────────────────────────────────────────
-  [4/6] 🤖 Implementer: [T1] Writing code...
-──────────────────────────────────────────────────
-
-──────────────────────────────────────────────────
-  [5/6] 🤖 Reviewer: [T1] Reviewing changes...
-──────────────────────────────────────────────────
-
-  ... (repeats for T2, then T3)
-
-──────────────────────────────────────────────────
-  [6/6] 🤖 Committer: Generating commit message...
-──────────────────────────────────────────────────
-
-============================================================
-✅ Done!
-
-Activity 모델 신규 추가 (User 1:N 관계).
-최근 활동 조회 서비스 함수 및 UI 컴포넌트 작성.
-```
+| Tool | Description |
+|------|-------------|
+| `load_project_context` | Load project base context (stack, architecture, structure, exception rules) from `base-context.yaml`. |
+| `check_rules` | Check if described changes violate any project exception rules. |
+| `get_session` | Get recent execution history and context summary. |
+| `record_execution` | Record a pipeline execution result for future session context. |
+| `get_analysis_cache` | Look up cached analysis for a scope before re-analyzing. |
+| `save_analysis_cache` | Save analysis results for a scope to cache for future reuse. |
+| `invalidate_analysis_cache` | Invalidate cached analysis for a scope after implementation changes it. |
+| `list_cached_scopes` | List all cached analysis scopes with brief info. |
+| `trigger_index` | Discover project scopes and build hierarchical scope tree (no code analysis). |
+| `get_scope_with_children` | Get a scope's cached analysis with summaries of all descendant scopes. |
+| `mark_stale_cascade` | Mark a scope and all its ancestor scopes as stale. |
 
 ## Architecture
 
 ```
-main.py                     ← CLI entry point
-orchestrator.py             ← Pipeline controller
-config.py                   ← Base context loader
-agents/
-  base.py                   ← APIAgent + ClaudeCodeAgent base classes
-  analyzer.py               ← API call (lightweight)
-  planner.py                ← API call (lightweight)
-  researcher.py             ← Claude Code subprocess (read-only)
-  implementer.py            ← Claude Code subprocess (read/write)
-  reviewer.py               ← API call (lightweight)
-  committer.py              ← API call (lightweight)
-base-context.example.yaml   ← Template
+Claude Code (orchestrator)
+    |
+    |-- Skills (.claude/skills/)      -- pipeline logic, subagent prompts
+    |-- MCP Tools (.mcp.json)         -- project context, session, analysis cache
+    |
+    +-- Subagents                     -- spawned by orchestrator for each phase
+            |
+            +-- MCP calls             -- subagents load context directly via MCP
 ```
 
-## Cost Optimization
+Key design decisions:
+- **Main agent = pure orchestrator.** It coordinates phases and handles user interaction but does not read files or load project context itself.
+- **All heavy work is delegated to subagents.** Each subagent loads context via MCP tools directly.
+- **User interaction happens only through the main agent.** Subagents return structured status (COMPLETE / NEEDS_CONTEXT) and never prompt the user.
+- **Pipeline phases:** Index (optional) -> Analyze -> Plan -> Execute (Research, Implement, Review) -> Commit & Push -> Record. Mandatory checkpoints after Analyze, Plan, and Execute.
 
-| Agent | Backend | Context Used | Est. Cost |
-|-------|---------|-------------|-----------|
-| Analyzer | API (Sonnet) | ~500 tokens | $0.002 |
-| Planner | API (Sonnet) | ~1K tokens | $0.004 |
-| Researcher | Claude Code | Variable | CLI pricing |
-| Implementer | Claude Code | Minimized by Researcher | CLI pricing |
-| Reviewer | API (Sonnet) | ~2K tokens | $0.008 |
-| Committer | API (Sonnet) | ~500 tokens | $0.002 |
+## Directory Structure
 
-The key savings come from Researcher minimizing what Implementer needs.
-
-## Customization
-
-### Swap Researcher to v2 (Python-native file access)
-
-In `orchestrator.py`, replace:
-```python
-self.researcher = ResearcherAgent(project_dir=project_dir, verbose=verbose)
 ```
-with:
-```python
-self.researcher = ResearcherAgentV2(project_dir=project_dir, model=model, verbose=verbose)
+src/ccx/
+    __init__.py
+    __main__.py
+    cli.py                  -- Setup CLI (init, update, status, index)
+    mcp_server.py           -- FastMCP server, 11 tools
+    config.py               -- base-context.yaml loader
+    scanner.py              -- Project auto-scan (runtime, framework, db, tree)
+    session.py              -- .ccx/session.json file-based session persistence
+    analysis_cache.py       -- Scope-based analysis cache with staleness detection
+    logger.py               -- MCP tool call logging
+    base-context.example.yaml
+    hooks/
+        log_event.sh        -- Hook script for event logging
+    skills/
+        run/
+            SKILL.md        -- /project:run entry point
+            PIPELINE.md     -- Detailed pipeline logic
+        analyze/
+            SKILL.md        -- /project:analyze
+        review/
+            SKILL.md        -- /project:review
+        commit/
+            SKILL.md        -- /project:commit
+        index/
+            SKILL.md        -- /project:index
 ```
 
-Implement `ResearcherAgentV2` that:
-1. Uses Python's pathlib/subprocess to read files and grep
-2. Sends collected context to Anthropic API
-3. Returns same `AgentResult` schema
+## Dependencies
 
-### Add retry loop for Reviewer rejections
-
-In `orchestrator.py` → `_execute_task()`, the TODO comment marks where to add retry logic.
-
-### Change models per agent
-
-Modify `Orchestrator.__init__()` to pass different models:
-```python
-self.analyzer = AnalyzerAgent(model="claude-haiku-4-5-20251001")  # cheap
-self.reviewer = ReviewerAgent(model="claude-opus-4-20250514")     # thorough
-```
+| Package | Version |
+|---------|---------|
+| python | ^3.11 |
+| pyyaml | ^6.0 |
+| click | ^8.0 |
+| mcp[cli] | >=1.0 |
+| pathspec | ^0.12 |

@@ -98,6 +98,7 @@ def status(project_dir: str):
         ".claude/skills/analyze/SKILL.md": (project / ".claude" / "skills" / "analyze" / "SKILL.md").exists(),
         ".claude/skills/review/SKILL.md": (project / ".claude" / "skills" / "review" / "SKILL.md").exists(),
         ".claude/skills/commit/SKILL.md": (project / ".claude" / "skills" / "commit" / "SKILL.md").exists(),
+        ".claude/skills/index/SKILL.md": (project / ".claude" / "skills" / "index" / "SKILL.md").exists(),
         ".claude/hooks/log_event.sh": (project / ".claude" / "hooks" / "log_event.sh").exists(),
         ".mcp.json": (project / ".mcp.json").exists(),
         "base-context.yaml": (project / "base-context.yaml").exists(),
@@ -111,6 +112,18 @@ def status(project_dir: str):
         click.echo(f"  [{icon}] {name}")
         if not ok:
             all_ok = False
+
+    # Analysis cache info
+    cache_path = project / ".ccx" / "analysis-cache.json"
+    if cache_path.exists():
+        try:
+            cache_data = json.loads(cache_path.read_text(encoding="utf-8"))
+            scope_count = sum(1 for k in cache_data if k != "_meta")
+            click.echo(f"  Analysis cache: {scope_count} scope(s) cached")
+        except json.JSONDecodeError:
+            click.echo("  Analysis cache: invalid JSON")
+    else:
+        click.echo("  Analysis cache: not initialized (run 'ccx index')")
 
     if all_ok:
         click.echo("\nAll components installed.")
