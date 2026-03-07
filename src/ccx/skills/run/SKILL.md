@@ -3,7 +3,7 @@ name: run
 description: "Full development pipeline: analyze -> plan -> implement -> review -> commit"
 disable-model-invocation: true
 argument-hint: "[request description]"
-allowed-tools: Read, Bash, Agent, TaskCreate, TaskUpdate, TaskList, TaskGet, AskUserQuestion, mcp__ccx__record_execution, mcp__ccx__invalidate_analysis_cache
+allowed-tools: Read, Bash, Agent, TaskCreate, TaskUpdate, TaskList, TaskGet, AskUserQuestion, mcp__ccx__record_execution, mcp__ccx__invalidate_analysis_cache, mcp__ccx__trigger_index, mcp__ccx__mark_stale_cascade, mcp__ccx__list_cached_scopes, mcp__ccx__get_scope_with_children
 ---
 
 # Full Development Pipeline

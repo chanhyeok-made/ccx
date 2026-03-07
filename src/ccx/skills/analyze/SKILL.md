@@ -3,7 +3,7 @@ name: analyze
 description: "Standalone analysis: analyze a request and produce structured requirements"
 disable-model-invocation: true
 argument-hint: "[request to analyze]"
-allowed-tools: Read, Grep, Glob, AskUserQuestion, mcp__ccx__load_project_context, mcp__ccx__get_session, mcp__ccx__get_analysis_cache, mcp__ccx__save_analysis_cache
+allowed-tools: Read, Grep, Glob, AskUserQuestion, mcp__ccx__load_project_context, mcp__ccx__get_session, mcp__ccx__get_analysis_cache, mcp__ccx__save_analysis_cache, mcp__ccx__trigger_index, mcp__ccx__get_scope_with_children, mcp__ccx__list_cached_scopes, mcp__ccx__mark_stale_cascade
 ---
 
 # Analyze Request (Standalone)
@@ -16,11 +16,13 @@ This is the **standalone** analysis skill (`/project:analyze`). You interact dir
 
 1. Call `mcp__ccx__load_project_context` with the current project directory.
 2. Call `mcp__ccx__get_session` to check for previous context.
-3. For each scope in the request, call `mcp__ccx__get_analysis_cache(project_dir, scope)`.
-   - Cache hit (not stale) → use cached summary, skip reading code for that scope.
-   - Cache miss or stale → read code, analyze, then call `mcp__ccx__save_analysis_cache` to cache results.
+3. **Index first:** Call `mcp__ccx__trigger_index(project_dir)` to discover all scopes and identify stale/new ones.
+4. For each relevant scope, call `mcp__ccx__get_scope_with_children(project_dir, scope)` to load cached analysis with hierarchy.
+   - Fresh → use cached analysis, skip reading code.
+   - Stale → re-analyze only changed files, then save via `mcp__ccx__save_analysis_cache` with `file_hashes`, `children`, `parent`.
+   - New (uncached) → full analysis, then save via `mcp__ccx__save_analysis_cache` with `file_hashes`, `children`, `parent`.
    - Scope naming: project-root-relative file path, no extension, lowercase (e.g. `"src/ccx/mcp_server"`).
-4. Analyze the request against the project context.
+5. Analyze the request against the project context.
 
 ## Rules
 

@@ -118,6 +118,56 @@ def status(project_dir: str):
         click.echo("\nSome components missing. Run 'ccx init' to set up.")
 
 
+@cli.command()
+@click.argument("project_dir", default=".", type=click.Path(exists=True))
+@click.option("--reset", is_flag=True, help="Reset analysis cache before indexing")
+@click.option("--verbose", "-v", is_flag=True, help="Show detailed scope information")
+def index(project_dir: str, reset: bool, verbose: bool):
+    """Discover and index project scopes for analysis caching."""
+    from ccx.analysis_cache import build_scope_tree
+
+    project = Path(project_dir).resolve()
+    ccx_dir = project / ".ccx"
+
+    if not ccx_dir.exists():
+        click.echo("Error: ccx is not initialized. Run 'ccx init' first.", err=True)
+        sys.exit(1)
+
+    if reset:
+        cache_file = ccx_dir / "analysis-cache.json"
+        if cache_file.exists():
+            cache_file.unlink()
+            click.echo("Analysis cache reset.")
+
+    click.echo(f"Indexing project: {project}")
+
+    # Build scope tree
+    result = build_scope_tree(str(project))
+
+    click.echo(f"\nDiscovered {result['total_scopes']} scopes:")
+    click.echo(f"  Packages: {result['packages']}")
+    click.echo(f"  Modules:  {result['modules']}")
+
+    if result.get("new_scopes"):
+        click.echo(f"\nNew scopes ({len(result['new_scopes'])}):")
+        for s in result["new_scopes"]:
+            click.echo(f"  + {s}")
+
+    if result.get("stale_scopes"):
+        click.echo(f"\nStale scopes ({len(result['stale_scopes'])}):")
+        for s in result["stale_scopes"]:
+            click.echo(f"  ~ {s}")
+
+    if verbose and result.get("scope_tree"):
+        click.echo("\nScope tree:")
+        for parent, children in sorted(result["scope_tree"].items()):
+            click.echo(f"  {parent}/")
+            for child in children:
+                click.echo(f"    ├── {child}")
+
+    click.echo("\nDone. Run '/project:run' or '/project:analyze' to trigger code-level analysis.")
+
+
 def _copy_skills(dest: Path, force: bool):
     """Copy skill templates from package to project."""
     if not SKILLS_SOURCE.exists():

@@ -56,11 +56,13 @@ round > 3 → CHECKPOINT("3회 시도 후에도 추가 맥락이 필요합니다
 
 **Analysis cache protocol:**
 - **Scope naming rule:** scope = project-root-relative file path, no extension, lowercase, forward slashes. Examples: `src/ccx/mcp_server.py` → `"src/ccx/mcp_server"`, `src/ccx/skills/` → `"src/ccx/skills"`. The server auto-normalizes, but subagents should follow this convention for clarity.
-- Before reading code, call `mcp__ccx__get_analysis_cache(project_dir, scope)` for each scope in the request.
-- `hit=true, stale=false` → use cached entry, skip reading code for that scope.
-- `hit=true, stale=true` → re-analyze only changed files (see `stale_reason`), then save updated cache.
-- `hit=false` → full analysis, then call `mcp__ccx__save_analysis_cache` with results.
-- After implementation changes files, call `mcp__ccx__invalidate_analysis_cache` for affected scopes.
+- **Index-first workflow:** Always start with `mcp__ccx__trigger_index(project_dir)` to discover all scopes and their stale/new status. This returns the full scope tree with hierarchy and staleness info.
+- For relevant scopes, call `mcp__ccx__get_scope_with_children(project_dir, scope)` to load cached analysis with full hierarchy (parent + children).
+- `fresh` scopes → use cached analysis as-is, skip reading code.
+- `stale` scopes → re-analyze only changed files, then save via `mcp__ccx__save_analysis_cache` with `file_hashes`, `children`, `parent`.
+- `new` (uncached) scopes → full analysis, then save via `mcp__ccx__save_analysis_cache` with `file_hashes`, `children`, `parent`.
+- Use `mcp__ccx__list_cached_scopes(project_dir)` to inspect existing cache entries when needed.
+- After implementation changes files, call `mcp__ccx__mark_stale_cascade(project_dir, scope)` on each modified scope to propagate staleness up the hierarchy.
 
 ---
 
@@ -70,10 +72,12 @@ Launch `general-purpose` Agent:
 
 > You are an Analyzer. Call `mcp__ccx__load_project_context("{project_dir}")` and `mcp__ccx__get_session("{project_dir}")`.
 > Analyze: "{user_request}"
-> - For each scope in the request, call `mcp__ccx__get_analysis_cache("{project_dir}", scope)` first.
->   - Cache hit (not stale) → use cached summary, skip reading code for that scope.
->   - Cache miss or stale → read code, analyze, then call `mcp__ccx__save_analysis_cache` to cache results.
-> - Intent: one sentence. Scope: module/layer level. Include session context.
+> 1. **Index first:** Call `mcp__ccx__trigger_index("{project_dir}")` to discover all scopes with stale/new status.
+> 2. **Load relevant scopes:** For each scope relevant to the request, call `mcp__ccx__get_scope_with_children("{project_dir}", scope)` to get cached analysis with hierarchy.
+>    - Fresh → use cached analysis, skip reading code.
+>    - Stale → re-analyze only changed files, then save via `mcp__ccx__save_analysis_cache` with `file_hashes`, `children`, `parent`.
+>    - New (uncached) → full analysis, then save via `mcp__ccx__save_analysis_cache` with `file_hashes`, `children`, `parent`.
+> 3. **Synthesize:** Intent: one sentence. Scope: module/layer level. Include session context.
 > - Do NOT use AskUserQuestion. Return results to the main agent.
 >
 > **Response format — you MUST end your response with one of:**
@@ -229,7 +233,7 @@ On reject/request_changes → re-implement with issues → re-review. Max 3 retr
 - "Request changes" → ask what to change (AskUserQuestion with options from context) → re-implement with user feedback → re-review → show again. Max 3 rounds.
 - "Reject & redo" → ask for new direction (AskUserQuestion) → restart from 3b with user's input.
 
-After user approves, call `mcp__ccx__invalidate_analysis_cache("{project_dir}", scope)` for each scope affected by the changes.
+After user approves, call `mcp__ccx__mark_stale_cascade("{project_dir}", scope)` for each scope affected by the changes to propagate staleness up the hierarchy.
 Mark completed with `TaskUpdate`. Output: `Task T{N} complete: {summary}`
 
 ---

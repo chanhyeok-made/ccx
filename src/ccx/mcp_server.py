@@ -17,6 +17,9 @@ from ccx.analysis_cache import (
     save_analysis_cache as _save_cache,
     invalidate_cache as _invalidate_cache,
     list_cached_scopes as _list_scopes,
+    build_scope_tree as _build_scope_tree,
+    get_scope_with_children as _get_scope_children,
+    mark_stale_cascade as _mark_stale,
 )
 
 mcp = FastMCP("ccx")
@@ -188,6 +191,10 @@ def save_analysis_cache(
     dependencies: list[str] | None = None,
     cached_by_request: str = "",
     extra: dict | None = None,
+    file_hashes: dict[str, str] | None = None,
+    children: list[str] | None = None,
+    parent: str | None = None,
+    scope_tree: dict[str, list[str]] | None = None,
 ) -> dict:
     """Save analysis results for a scope to cache for future reuse.
 
@@ -202,6 +209,10 @@ def save_analysis_cache(
         dependencies: Dependencies on other scopes.
         cached_by_request: The user request that triggered this analysis.
         extra: Additional structured data for future extensions.
+        file_hashes: Mapping of relative file paths to git blob hashes for staleness detection.
+        children: List of child scope keys in the scope hierarchy.
+        parent: Parent scope key in the scope hierarchy.
+        scope_tree: Full scope tree mapping to store in cache metadata.
 
     Returns:
         Dict with status and scope.
@@ -217,6 +228,10 @@ def save_analysis_cache(
         dependencies=dependencies,
         cached_by_request=cached_by_request,
         extra=extra,
+        file_hashes=file_hashes,
+        children=children,
+        parent=parent,
+        scope_tree=scope_tree,
     )
 
 
@@ -233,6 +248,62 @@ def invalidate_analysis_cache(project_dir: str, scope: str) -> dict:
         Dict with status (invalidated/not_found) and scope.
     """
     return _invalidate_cache(project_dir, scope)
+
+
+@mcp.tool()
+@_with_logging
+def list_cached_scopes(project_dir: str) -> list[dict]:
+    """List all cached analysis scopes with brief info.
+
+    Args:
+        project_dir: Project root directory path.
+    """
+    return _list_scopes(project_dir)
+
+
+@mcp.tool()
+@_with_logging
+def trigger_index(project_dir: str) -> dict:
+    """Discover project scopes and build hierarchical scope tree.
+
+    Scans the project for modules/packages, builds parent-children relationships,
+    and identifies new/stale scopes. Does NOT perform code analysis —
+    returns scope metadata for the caller to analyze selectively.
+
+    Args:
+        project_dir: Project root directory path.
+
+    Returns:
+        Dict with total_scopes, packages, modules, scope_tree, new_scopes, stale_scopes.
+    """
+    return _build_scope_tree(project_dir)
+
+
+@mcp.tool()
+@_with_logging
+def get_scope_with_children(project_dir: str, scope: str, check_staleness: bool = True) -> dict:
+    """Get a scope's cached analysis with summaries of all descendant scopes.
+
+    Args:
+        project_dir: Project root directory path.
+        scope: Scope key (e.g., "src/ccx/scanner").
+        check_staleness: Whether to check if scopes are stale.
+    """
+    return _get_scope_children(project_dir, scope, check_staleness)
+
+
+@mcp.tool()
+@_with_logging
+def mark_stale_cascade(project_dir: str, scope: str) -> dict:
+    """Mark a scope and all its ancestor scopes as stale.
+
+    Use after modifying files to ensure parent scopes are re-analyzed.
+
+    Args:
+        project_dir: Project root directory path.
+        scope: Scope key to mark as stale.
+    """
+    return _mark_stale(project_dir, scope)
 
 
 def main():
