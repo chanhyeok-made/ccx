@@ -4,6 +4,7 @@ Installs skills and MCP server configuration into target projects.
 """
 
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -11,6 +12,7 @@ from pathlib import Path
 import click
 
 SKILLS_SOURCE = Path(__file__).parent / "skills"
+HOOKS_SOURCE = Path(__file__).parent / "hooks"
 
 MCP_CONFIG = {
     "mcpServers": {
@@ -43,18 +45,28 @@ def init(project_dir: str, force: bool):
     skills_dest = project / ".claude" / "skills"
     _copy_skills(skills_dest, force)
 
-    # 2. Create/update .mcp.json
+    # 2. Copy hooks to .claude/hooks/
+    hooks_dest = project / ".claude" / "hooks"
+    _copy_hooks(hooks_dest, force)
+
+    # 3. Configure hooks in .claude/settings.json
+    _write_hook_settings(project, force)
+
+    # 4. Create/update .mcp.json
     _write_mcp_json(project, force)
 
-    # 3. Create base-context.yaml by scanning project
+    # 5. Create base-context.yaml by scanning project
     _create_base_context_starter(project, force)
 
-    # 4. Create .ccx/ directory
+    # 6. Create .ccx/ directory and logs subdirectory
     ccx_dir = project / ".ccx"
     ccx_dir.mkdir(exist_ok=True)
+    logs_dir = ccx_dir / "logs"
+    logs_dir.mkdir(exist_ok=True)
 
     click.echo("\nccx initialized successfully!")
     click.echo(f"  Skills:       {skills_dest}")
+    click.echo(f"  Hooks:        {hooks_dest}")
     click.echo(f"  MCP config:   {project / '.mcp.json'}")
     click.echo(f"  Session dir:  {ccx_dir}")
     click.echo("\nNext steps:")
@@ -65,11 +77,14 @@ def init(project_dir: str, force: bool):
 @cli.command()
 @click.argument("project_dir", default=".", type=click.Path(exists=True))
 def update(project_dir: str):
-    """Update skill templates to latest version."""
+    """Update skill templates and hooks to latest version."""
     project = Path(project_dir).resolve()
     skills_dest = project / ".claude" / "skills"
     _copy_skills(skills_dest, force=True)
-    click.echo("Skills updated successfully!")
+    hooks_dest = project / ".claude" / "hooks"
+    _copy_hooks(hooks_dest, force=True)
+    _write_hook_settings(project, force=True)
+    click.echo("Skills and hooks updated successfully!")
 
 
 @cli.command()
@@ -83,6 +98,7 @@ def status(project_dir: str):
         ".claude/skills/analyze/SKILL.md": (project / ".claude" / "skills" / "analyze" / "SKILL.md").exists(),
         ".claude/skills/review/SKILL.md": (project / ".claude" / "skills" / "review" / "SKILL.md").exists(),
         ".claude/skills/commit/SKILL.md": (project / ".claude" / "skills" / "commit" / "SKILL.md").exists(),
+        ".claude/hooks/log_event.sh": (project / ".claude" / "hooks" / "log_event.sh").exists(),
         ".mcp.json": (project / ".mcp.json").exists(),
         "base-context.yaml": (project / "base-context.yaml").exists(),
         ".ccx/": (project / ".ccx").is_dir(),
@@ -123,6 +139,74 @@ def _copy_skills(dest: Path, force: bool):
             if f.is_file():
                 shutil.copy2(f, target / f.name)
                 click.echo(f"  Copied {skill_dir.name}/{f.name}")
+
+
+def _copy_hooks(dest: Path, force: bool):
+    """Copy hook scripts from package to project."""
+    if not HOOKS_SOURCE.exists():
+        click.echo(f"Warning: Hooks source not found at {HOOKS_SOURCE}", err=True)
+        return
+
+    dest.mkdir(parents=True, exist_ok=True)
+    for f in HOOKS_SOURCE.iterdir():
+        if not f.is_file():
+            continue
+
+        target = dest / f.name
+        if target.exists() and not force:
+            click.echo(f"  Skipping hooks/{f.name} (exists, use --force to overwrite)")
+            continue
+
+        shutil.copy2(f, target)
+        os.chmod(target, 0o755)
+        click.echo(f"  Copied hooks/{f.name}")
+
+
+def _write_hook_settings(project: Path, force: bool):
+    """Add hook configuration to .claude/settings.json."""
+    settings_path = project / ".claude" / "settings.json"
+
+    existing = {}
+    if settings_path.exists():
+        raw = settings_path.read_text(encoding="utf-8")
+        try:
+            existing = json.loads(raw)
+        except json.JSONDecodeError:
+            click.echo(
+                f"  Warning: {settings_path} is malformed JSON, skipping hook config",
+                err=True,
+            )
+            return
+
+    if "hooks" in existing and not force:
+        click.echo("  settings.json already has hooks config, skipping")
+        return
+
+    hook_entry = {
+        "type": "command",
+        "command": '"$CLAUDE_PROJECT_DIR"/.claude/hooks/log_event.sh',
+        "timeout": 10,
+    }
+
+    hooks = {}
+    for event in [
+        "PreToolUse",
+        "PostToolUse",
+        "PostToolUseFailure",
+        "UserPromptSubmit",
+        "SubagentStart",
+        "SubagentStop",
+        "Stop",
+    ]:
+        hooks[event] = [{"matcher": "", "hooks": [hook_entry]}]
+
+    existing["hooks"] = hooks
+
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(
+        json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    click.echo("  Configured hooks in .claude/settings.json")
 
 
 def _write_mcp_json(project: Path, force: bool):
