@@ -144,16 +144,17 @@ def status(project_dir: str):
             all_ok = False
 
     # Analysis cache info
-    cache_path = project / ".ccx" / "analysis-cache.json"
-    if cache_path.exists():
-        try:
-            cache_data = json.loads(cache_path.read_text(encoding="utf-8"))
-            scope_count = sum(1 for k in cache_data if k != "_meta")
-            click.echo(f"  Analysis cache: {scope_count} scope(s) cached")
-        except json.JSONDecodeError:
-            click.echo("  Analysis cache: invalid JSON")
+    cache_dir = project / ".ccx" / "cache" / "scopes"
+    if cache_dir.exists():
+        scope_files = list(cache_dir.rglob("_scope.json"))
+        click.echo(f"  Analysis cache: {len(scope_files)} scope(s) cached (directory-based)")
     else:
-        click.echo("  Analysis cache: not initialized (run 'ccx index')")
+        # Check for legacy flat file
+        legacy = project / ".ccx" / "analysis-cache.json"
+        if legacy.exists():
+            click.echo("  Analysis cache: legacy format (will migrate on next use)")
+        else:
+            click.echo("  Analysis cache: not initialized (run 'ccx index')")
 
     if all_ok:
         click.echo("\nAll components installed.")
@@ -177,10 +178,15 @@ def index(project_dir: str, reset: bool, verbose: bool):
         sys.exit(1)
 
     if reset:
-        cache_file = ccx_dir / "analysis-cache.json"
-        if cache_file.exists():
-            cache_file.unlink()
+        cache_subdir = ccx_dir / "cache"
+        if cache_subdir.exists():
+            shutil.rmtree(cache_subdir)
             click.echo("Analysis cache reset.")
+        # Also clean up legacy file if present
+        legacy_file = ccx_dir / "analysis-cache.json"
+        if legacy_file.exists():
+            legacy_file.unlink()
+            click.echo("Legacy cache file removed.")
 
     click.echo(f"Indexing project: {project}")
 

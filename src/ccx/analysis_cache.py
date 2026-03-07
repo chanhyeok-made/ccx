@@ -1,9 +1,21 @@
 """
 Analysis cache for reusing module-level knowledge across pipeline runs.
 Reduces token usage by caching structured analysis results per scope.
+
+Storage layout (v2 directory-based):
+    .ccx/cache/
+    ├── _meta.json              <- {version, created_at, scope_tree}
+    └── scopes/
+        └── src/
+            └── ccx/
+                ├── _scope.json     <- CacheEntry for "src/ccx"
+                └── hooks/
+                    └── log_event/
+                        └── _scope.json <- CacheEntry for "src/ccx/hooks/log_event"
 """
 
 import json
+import shutil
 import subprocess
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
@@ -11,10 +23,16 @@ from pathlib import Path
 from typing import Any
 
 CACHE_DIR = ".ccx"
-CACHE_FILE = "analysis-cache.json"
-MAX_SCOPES = 200
+CACHE_SUBDIR = "cache"
+SCOPES_SUBDIR = "scopes"
+SCOPE_FILE = "_scope.json"
+META_FILE = "_meta.json"
 CACHE_VERSION = 2
-STALENESS_THRESHOLD_SECONDS = 0  # any change after cached_at → stale
+MAX_SCOPES = 200
+STALENESS_THRESHOLD_SECONDS = 0  # any change after cached_at -> stale
+
+# Legacy flat-file name (for migration)
+_LEGACY_CACHE_FILE = "analysis-cache.json"
 
 
 @dataclass
@@ -37,6 +55,10 @@ class CacheEntry:
     parent: str | None = None  # parent scope key
 
 
+# ---------------------------------------------------------------------------
+# Scope normalization (unchanged)
+# ---------------------------------------------------------------------------
+
 def normalize_scope(scope: str) -> str:
     """Normalize scope to a canonical file-path-based key.
 
@@ -47,9 +69,9 @@ def normalize_scope(scope: str) -> str:
     - Lowercase
 
     Examples:
-        "src/ccx/mcp_server.py" → "src/ccx/mcp_server"
-        "src/ccx/Skills/" → "src/ccx/skills"
-        "Src\\CCX\\Config.py" → "src/ccx/config"
+        "src/ccx/mcp_server.py" -> "src/ccx/mcp_server"
+        "src/ccx/Skills/" -> "src/ccx/skills"
+        "Src\\CCX\\Config.py" -> "src/ccx/config"
     """
     s = scope.strip().strip("/").strip("\\")
     s = s.replace("\\", "/")
@@ -62,44 +84,203 @@ def normalize_scope(scope: str) -> str:
     return s.rstrip("/")
 
 
-def _cache_path(project_dir: str) -> Path:
-    return Path(project_dir) / CACHE_DIR / CACHE_FILE
+# ---------------------------------------------------------------------------
+# Low-level path helpers
+# ---------------------------------------------------------------------------
+
+def _cache_base(project_dir: str) -> Path:
+    """Return .ccx/cache/ path."""
+    return Path(project_dir) / CACHE_DIR / CACHE_SUBDIR
 
 
-def _migrate_v1_to_v2(data: dict) -> dict:
-    """Migrate cache data from v1 to v2: add file_hashes, children, parent fields."""
-    data.setdefault("_meta", {"version": 1, "created_at": ""})
-    for key, entry in data.items():
-        if key == "_meta":
-            continue
-        entry.setdefault("file_hashes", {})
-        entry.setdefault("children", [])
-        entry.setdefault("parent", None)
-        entry["version"] = 2
-    data["_meta"]["version"] = 2
-    return data
+def _scopes_dir(project_dir: str) -> Path:
+    """Return .ccx/cache/scopes/ path."""
+    return _cache_base(project_dir) / SCOPES_SUBDIR
 
 
-def _load_cache(project_dir: str) -> dict:
-    path = _cache_path(project_dir)
+def _meta_path(project_dir: str) -> Path:
+    """Return .ccx/cache/_meta.json path."""
+    return _cache_base(project_dir) / META_FILE
+
+
+def _scope_to_path(project_dir: str, scope: str) -> Path:
+    """Convert scope key to _scope.json path.
+    e.g. 'src/ccx/hooks/log_event' -> .ccx/cache/scopes/src/ccx/hooks/log_event/_scope.json
+    """
+    return _scopes_dir(project_dir) / scope / SCOPE_FILE
+
+
+# ---------------------------------------------------------------------------
+# Low-level I/O helpers
+# ---------------------------------------------------------------------------
+
+def _load_meta(project_dir: str) -> dict:
+    """Load _meta.json. Return default if not exists."""
+    path = _meta_path(project_dir)
     if not path.exists():
-        return {"_meta": {"version": CACHE_VERSION, "created_at": datetime.now(timezone.utc).isoformat()}}
-    data = json.loads(path.read_text(encoding="utf-8"))
+        return {
+            "version": CACHE_VERSION,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {
+            "version": CACHE_VERSION,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
 
-    # Migration: v1 → v2
-    meta = data.get("_meta", {})
-    if meta.get("version", 1) < 2:
-        data = _migrate_v1_to_v2(data)
-        _save_cache(project_dir, data)
 
-    return data
-
-
-def _save_cache(project_dir: str, data: dict) -> None:
-    path = _cache_path(project_dir)
+def _save_meta(project_dir: str, meta: dict) -> None:
+    """Write _meta.json."""
+    path = _meta_path(project_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
+
+def _load_scope(project_dir: str, scope: str) -> dict | None:
+    """Load a single scope's _scope.json. Return None if not exists."""
+    path = _scope_to_path(project_dir, scope)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _save_scope(project_dir: str, scope: str, entry: dict) -> None:
+    """Write a single scope's _scope.json. Create dirs as needed."""
+    path = _scope_to_path(project_dir, scope)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(entry, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _delete_scope(project_dir: str, scope: str) -> None:
+    """Delete a scope's _scope.json and clean up empty parent dirs up to scopes/."""
+    path = _scope_to_path(project_dir, scope)
+    if path.exists():
+        try:
+            path.unlink()
+        except OSError:
+            return
+    # Clean up empty parent directories up to (but not including) scopes/
+    _cleanup_empty_dirs(path.parent, _scopes_dir(project_dir))
+
+
+def _cleanup_empty_dirs(path: Path, stop_at: Path) -> None:
+    """Remove empty directories from path up to (but not including) stop_at."""
+    current = path
+    stop_resolved = stop_at.resolve()
+    while True:
+        try:
+            current_resolved = current.resolve()
+        except OSError:
+            break
+        # Don't delete the stop_at directory itself or anything above it
+        if current_resolved == stop_resolved or not str(current_resolved).startswith(str(stop_resolved)):
+            break
+        try:
+            if current.exists() and current.is_dir() and not any(current.iterdir()):
+                current.rmdir()
+            else:
+                break  # Directory not empty, stop
+        except OSError:
+            break
+        current = current.parent
+
+
+def _list_all_scopes(project_dir: str) -> list[dict]:
+    """Walk scopes/ directory, find all _scope.json files, load and return entries."""
+    scopes_root = _scopes_dir(project_dir)
+    if not scopes_root.exists():
+        return []
+
+    entries: list[dict] = []
+    for scope_file in scopes_root.rglob(SCOPE_FILE):
+        try:
+            entry = json.loads(scope_file.read_text(encoding="utf-8"))
+            entries.append(entry)
+        except (json.JSONDecodeError, OSError):
+            continue
+    return entries
+
+
+# ---------------------------------------------------------------------------
+# Migration from flat file to directory-based cache
+# ---------------------------------------------------------------------------
+
+def _migrate_flat_to_dir(project_dir: str) -> None:
+    """If old analysis-cache.json exists, split into per-scope files + _meta.json.
+    Also handle v1->v2 field upgrades.
+    Rename old file to analysis-cache.json.bak.
+    """
+    legacy_path = Path(project_dir) / CACHE_DIR / _LEGACY_CACHE_FILE
+    if not legacy_path.exists():
+        return
+
+    try:
+        data = json.loads(legacy_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        # Can't read legacy file; rename it and move on
+        try:
+            legacy_path.rename(legacy_path.with_suffix(".json.bak"))
+        except OSError:
+            pass
+        return
+
+    # Extract _meta or build a default one
+    old_meta = data.pop("_meta", {})
+    old_version = old_meta.get("version", 1)
+
+    meta: dict[str, Any] = {
+        "version": CACHE_VERSION,
+        "created_at": old_meta.get("created_at", datetime.now(timezone.utc).isoformat()),
+    }
+    if "scope_tree" in old_meta:
+        meta["scope_tree"] = old_meta["scope_tree"]
+
+    # Write meta
+    _save_meta(project_dir, meta)
+
+    # Migrate each scope entry
+    for key, entry in data.items():
+        if not isinstance(entry, dict):
+            continue
+
+        # v1 -> v2 field upgrades
+        if old_version < 2:
+            entry.setdefault("file_hashes", {})
+            entry.setdefault("children", [])
+            entry.setdefault("parent", None)
+            entry["version"] = CACHE_VERSION
+
+        _save_scope(project_dir, key, entry)
+
+    # Rename old file to .bak
+    try:
+        backup_path = legacy_path.with_suffix(".json.bak")
+        if backup_path.exists():
+            backup_path.unlink()
+        legacy_path.rename(backup_path)
+    except OSError:
+        pass
+
+
+def _ensure_cache(project_dir: str) -> None:
+    """Create cache dirs if needed. Run migration if old file exists."""
+    scopes_root = _scopes_dir(project_dir)
+    scopes_root.mkdir(parents=True, exist_ok=True)
+
+    # Run migration if legacy flat file exists
+    legacy_path = Path(project_dir) / CACHE_DIR / _LEGACY_CACHE_FILE
+    if legacy_path.exists():
+        _migrate_flat_to_dir(project_dir)
+
+
+# ---------------------------------------------------------------------------
+# Staleness detection (unchanged from original)
+# ---------------------------------------------------------------------------
 
 def _check_staleness(project_dir: str, entry: dict) -> tuple[bool, str]:
     """Check if cached entry is stale by detecting file changes.
@@ -184,207 +365,6 @@ def _check_staleness(project_dir: str, entry: dict) -> tuple[bool, str]:
     return False, ""
 
 
-def get_analysis_cache(
-    project_dir: str, scope: str, check_staleness: bool = True
-) -> dict:
-    """Look up cached analysis for a scope.
-
-    Returns: {hit: bool, stale: bool, entry: dict|None, stale_reason: str}
-    """
-    scope = normalize_scope(scope)
-    data = _load_cache(project_dir)
-    entry = data.get(scope)
-
-    if entry is None or scope == "_meta":
-        return {"hit": False, "stale": False, "entry": None, "stale_reason": ""}
-
-    stale = False
-    stale_reason = ""
-    if check_staleness:
-        stale, stale_reason = _check_staleness(project_dir, entry)
-
-    return {
-        "hit": True,
-        "stale": stale,
-        "entry": entry,
-        "stale_reason": stale_reason,
-    }
-
-
-def save_analysis_cache(
-    project_dir: str,
-    scope: str,
-    summary: str,
-    key_files: list[str] | None = None,
-    interfaces: list[str] | None = None,
-    known_issues: list[str] | None = None,
-    patterns: list[str] | None = None,
-    dependencies: list[str] | None = None,
-    cached_by_request: str = "",
-    extra: dict | None = None,
-    file_hashes: dict[str, str] | None = None,
-    children: list[str] | None = None,
-    parent: str | None = None,
-    scope_tree: dict[str, list[str]] | None = None,
-) -> dict:
-    """Save or update analysis cache for a scope.
-
-    Returns: {status: str, scope: str}
-    """
-    scope = normalize_scope(scope)
-    data = _load_cache(project_dir)
-
-    entry = CacheEntry(
-        scope=scope,
-        summary=summary,
-        key_files=key_files or [],
-        interfaces=interfaces or [],
-        known_issues=known_issues or [],
-        patterns=patterns or [],
-        dependencies=dependencies or [],
-        cached_at=datetime.now(timezone.utc).isoformat(),
-        cached_by_request=cached_by_request,
-        extra=extra or {},
-        file_hashes=file_hashes or {},
-        children=children or [],
-        parent=parent,
-    )
-
-    data[scope] = asdict(entry)
-
-    # Update scope_tree in _meta if provided
-    if scope_tree is not None:
-        data["_meta"]["scope_tree"] = scope_tree
-
-    # Rolling limit: evict oldest entries beyond MAX_SCOPES
-    scope_keys = [k for k in data if k != "_meta"]
-    if len(scope_keys) > MAX_SCOPES:
-        # Sort by cached_at ascending, evict oldest
-        scope_keys.sort(key=lambda k: data[k].get("cached_at", ""))
-        for k in scope_keys[: len(scope_keys) - MAX_SCOPES]:
-            del data[k]
-
-    _save_cache(project_dir, data)
-    return {"status": "saved", "scope": scope}
-
-
-def invalidate_cache(project_dir: str, scope: str) -> dict:
-    """Remove a scope from the cache.
-
-    Returns: {status: str, scope: str}
-    """
-    scope = normalize_scope(scope)
-    data = _load_cache(project_dir)
-
-    if scope in data and scope != "_meta":
-        del data[scope]
-        _save_cache(project_dir, data)
-        return {"status": "invalidated", "scope": scope}
-
-    return {"status": "not_found", "scope": scope}
-
-
-def list_cached_scopes(project_dir: str) -> list[dict]:
-    """List all cached scopes with brief info.
-
-    Returns: list of {scope, summary, cached_at, key_files_count}
-    """
-    data = _load_cache(project_dir)
-    result = []
-    for key, entry in data.items():
-        if key == "_meta":
-            continue
-        result.append({
-            "scope": key,
-            "summary": entry.get("summary", ""),
-            "cached_at": entry.get("cached_at", ""),
-            "key_files_count": len(entry.get("key_files", [])),
-        })
-    return result
-
-
-def build_scope_tree(project_dir: str) -> dict:
-    """Build hierarchical scope tree from project structure.
-
-    Discovers all scopes, updates parent/children relationships,
-    saves scope_tree to cache _meta.
-    """
-    from ccx.scanner import discover_scopes
-
-    scopes = discover_scopes(project_dir)
-    data = _load_cache(project_dir)
-
-    # Build scope_tree: {parent_key: [child_keys]}
-    scope_tree: dict[str, list[str]] = {}
-    for s in scopes:
-        parent = s.get("parent")
-        if parent is not None:
-            scope_tree.setdefault(parent, [])
-            if s["key"] not in scope_tree[parent]:
-                scope_tree[parent].append(s["key"])
-
-    # Track all discovered scope keys
-    discovered_keys = {s["key"] for s in scopes}
-
-    # Identify new and stale scopes
-    existing_keys = {k for k in data if k != "_meta"}
-    new_scopes = sorted(discovered_keys - existing_keys)
-    stale_scopes = sorted(existing_keys - discovered_keys)
-
-    # Count types
-    packages = sum(1 for s in scopes if s["type"] == "package")
-    modules = sum(1 for s in scopes if s["type"] == "module")
-
-    # Update existing cache entries with parent/children relationships
-    for s in scopes:
-        key = s["key"]
-        children = scope_tree.get(key, [])
-        parent = s.get("parent")
-
-        if key in data and key != "_meta":
-            data[key]["children"] = children
-            data[key]["parent"] = parent
-        # For new scopes not yet in cache, create a minimal placeholder entry
-        elif key not in data:
-            data[key] = {
-                "scope": key,
-                "summary": "",
-                "key_files": s.get("files", []),
-                "interfaces": [],
-                "known_issues": [],
-                "patterns": [],
-                "dependencies": [],
-                "cached_at": "",
-                "cached_by_request": "",
-                "version": CACHE_VERSION,
-                "extra": {},
-                "file_hashes": {},
-                "children": children,
-                "parent": parent,
-            }
-
-    # Save scope_tree to _meta
-    data["_meta"]["scope_tree"] = scope_tree
-
-    # Rolling limit: evict oldest entries beyond MAX_SCOPES
-    scope_keys = [k for k in data if k != "_meta"]
-    if len(scope_keys) > MAX_SCOPES:
-        scope_keys.sort(key=lambda k: data[k].get("cached_at", ""))
-        for k in scope_keys[: len(scope_keys) - MAX_SCOPES]:
-            del data[k]
-
-    _save_cache(project_dir, data)
-
-    return {
-        "total_scopes": len(scopes),
-        "packages": packages,
-        "modules": modules,
-        "scope_tree": scope_tree,
-        "new_scopes": new_scopes,
-        "stale_scopes": stale_scopes,
-    }
-
-
 def _load_git_index(project_dir: str) -> dict[str, str] | None:
     """Run `git ls-files -s` once and return {path: blob_hash} or None on failure."""
     try:
@@ -433,15 +413,233 @@ def _check_staleness_with_index(
     return _check_staleness(project_dir, entry)
 
 
+# ---------------------------------------------------------------------------
+# Public API (signatures unchanged)
+# ---------------------------------------------------------------------------
+
+def get_analysis_cache(
+    project_dir: str, scope: str, check_staleness: bool = True
+) -> dict:
+    """Look up cached analysis for a scope.
+
+    Returns: {hit: bool, stale: bool, entry: dict|None, stale_reason: str}
+    """
+    scope = normalize_scope(scope)
+    _ensure_cache(project_dir)
+    entry = _load_scope(project_dir, scope)
+
+    if entry is None:
+        return {"hit": False, "stale": False, "entry": None, "stale_reason": ""}
+
+    stale = False
+    stale_reason = ""
+    if check_staleness:
+        stale, stale_reason = _check_staleness(project_dir, entry)
+
+    return {
+        "hit": True,
+        "stale": stale,
+        "entry": entry,
+        "stale_reason": stale_reason,
+    }
+
+
+def save_analysis_cache(
+    project_dir: str,
+    scope: str,
+    summary: str,
+    key_files: list[str] | None = None,
+    interfaces: list[str] | None = None,
+    known_issues: list[str] | None = None,
+    patterns: list[str] | None = None,
+    dependencies: list[str] | None = None,
+    cached_by_request: str = "",
+    extra: dict | None = None,
+    file_hashes: dict[str, str] | None = None,
+    children: list[str] | None = None,
+    parent: str | None = None,
+    scope_tree: dict[str, list[str]] | None = None,
+) -> dict:
+    """Save or update analysis cache for a scope.
+
+    Returns: {status: str, scope: str}
+    """
+    scope = normalize_scope(scope)
+    _ensure_cache(project_dir)
+
+    entry = CacheEntry(
+        scope=scope,
+        summary=summary,
+        key_files=key_files or [],
+        interfaces=interfaces or [],
+        known_issues=known_issues or [],
+        patterns=patterns or [],
+        dependencies=dependencies or [],
+        cached_at=datetime.now(timezone.utc).isoformat(),
+        cached_by_request=cached_by_request,
+        extra=extra or {},
+        file_hashes=file_hashes or {},
+        children=children or [],
+        parent=parent,
+    )
+
+    _save_scope(project_dir, scope, asdict(entry))
+
+    # Update scope_tree in _meta if provided
+    if scope_tree is not None:
+        meta = _load_meta(project_dir)
+        meta["scope_tree"] = scope_tree
+        _save_meta(project_dir, meta)
+
+    # Rolling limit: evict oldest entries beyond MAX_SCOPES
+    all_entries = _list_all_scopes(project_dir)
+    if len(all_entries) > MAX_SCOPES:
+        # Sort by cached_at ascending, evict oldest
+        all_entries.sort(key=lambda e: e.get("cached_at", ""))
+        to_evict = all_entries[: len(all_entries) - MAX_SCOPES]
+        for old_entry in to_evict:
+            old_scope = old_entry.get("scope", "")
+            if old_scope:
+                _delete_scope(project_dir, old_scope)
+
+    return {"status": "saved", "scope": scope}
+
+
+def invalidate_cache(project_dir: str, scope: str) -> dict:
+    """Remove a scope from the cache.
+
+    Returns: {status: str, scope: str}
+    """
+    scope = normalize_scope(scope)
+    _ensure_cache(project_dir)
+
+    existing = _load_scope(project_dir, scope)
+    if existing is not None:
+        _delete_scope(project_dir, scope)
+        return {"status": "invalidated", "scope": scope}
+
+    return {"status": "not_found", "scope": scope}
+
+
+def list_cached_scopes(project_dir: str) -> list[dict]:
+    """List all cached scopes with brief info.
+
+    Returns: list of {scope, summary, cached_at, key_files_count}
+    """
+    _ensure_cache(project_dir)
+    all_entries = _list_all_scopes(project_dir)
+    result = []
+    for entry in all_entries:
+        result.append({
+            "scope": entry.get("scope", ""),
+            "summary": entry.get("summary", ""),
+            "cached_at": entry.get("cached_at", ""),
+            "key_files_count": len(entry.get("key_files", [])),
+        })
+    return result
+
+
+def build_scope_tree(project_dir: str) -> dict:
+    """Build hierarchical scope tree from project structure.
+
+    Discovers all scopes, updates parent/children relationships,
+    saves scope_tree to cache _meta.
+    """
+    from ccx.scanner import discover_scopes
+
+    scopes = discover_scopes(project_dir)
+    _ensure_cache(project_dir)
+
+    # Build scope_tree: {parent_key: [child_keys]}
+    scope_tree: dict[str, list[str]] = {}
+    for s in scopes:
+        parent = s.get("parent")
+        if parent is not None:
+            scope_tree.setdefault(parent, [])
+            if s["key"] not in scope_tree[parent]:
+                scope_tree[parent].append(s["key"])
+
+    # Track all discovered scope keys
+    discovered_keys = {s["key"] for s in scopes}
+
+    # Load all existing cached scopes
+    all_existing = _list_all_scopes(project_dir)
+    existing_keys = {e.get("scope", "") for e in all_existing}
+
+    # Identify new and stale scopes
+    new_scopes = sorted(discovered_keys - existing_keys)
+    stale_scopes = sorted(existing_keys - discovered_keys)
+
+    # Count types
+    packages = sum(1 for s in scopes if s["type"] == "package")
+    modules = sum(1 for s in scopes if s["type"] == "module")
+
+    # Update existing cache entries with parent/children relationships
+    for s in scopes:
+        key = s["key"]
+        children_list = scope_tree.get(key, [])
+        parent = s.get("parent")
+
+        existing_entry = _load_scope(project_dir, key)
+        if existing_entry is not None:
+            # Update parent/children on existing scope
+            existing_entry["children"] = children_list
+            existing_entry["parent"] = parent
+            _save_scope(project_dir, key, existing_entry)
+        else:
+            # Create a minimal placeholder entry for new scopes
+            placeholder = {
+                "scope": key,
+                "summary": "",
+                "key_files": s.get("files", []),
+                "interfaces": [],
+                "known_issues": [],
+                "patterns": [],
+                "dependencies": [],
+                "cached_at": "",
+                "cached_by_request": "",
+                "version": CACHE_VERSION,
+                "extra": {},
+                "file_hashes": {},
+                "children": children_list,
+                "parent": parent,
+            }
+            _save_scope(project_dir, key, placeholder)
+
+    # Save scope_tree to _meta
+    meta = _load_meta(project_dir)
+    meta["scope_tree"] = scope_tree
+    _save_meta(project_dir, meta)
+
+    # Rolling limit: evict oldest entries beyond MAX_SCOPES
+    all_entries = _list_all_scopes(project_dir)
+    if len(all_entries) > MAX_SCOPES:
+        all_entries.sort(key=lambda e: e.get("cached_at", ""))
+        to_evict = all_entries[: len(all_entries) - MAX_SCOPES]
+        for old_entry in to_evict:
+            old_scope = old_entry.get("scope", "")
+            if old_scope:
+                _delete_scope(project_dir, old_scope)
+
+    return {
+        "total_scopes": len(scopes),
+        "packages": packages,
+        "modules": modules,
+        "scope_tree": scope_tree,
+        "new_scopes": new_scopes,
+        "stale_scopes": stale_scopes,
+    }
+
+
 def get_scope_with_children(
     project_dir: str, scope: str, check_staleness: bool = True
 ) -> dict:
     """Get a scope entry with summaries of all descendant scopes."""
     scope = normalize_scope(scope)
-    data = _load_cache(project_dir)
-    entry = data.get(scope)
+    _ensure_cache(project_dir)
+    entry = _load_scope(project_dir, scope)
 
-    if entry is None or scope == "_meta":
+    if entry is None:
         return {"scope": None, "children": [], "stale": True}
 
     if check_staleness:
@@ -451,17 +649,28 @@ def get_scope_with_children(
     else:
         stale = False
 
+    # Get scope_tree from meta to find descendants
+    meta = _load_meta(project_dir)
+    scope_tree = meta.get("scope_tree", {})
+
     # Recursively collect all descendant scopes
     children_summaries: list[dict] = []
     visited: set[str] = set()
 
     def _collect_descendants(parent_key: str) -> None:
-        child_keys = data.get(parent_key, {}).get("children", [])
+        # Use scope_tree from meta if available, otherwise fall back to entry's children field
+        child_keys = scope_tree.get(parent_key, [])
+        if not child_keys:
+            # Fallback: read the parent's entry to get its children field
+            parent_entry = _load_scope(project_dir, parent_key)
+            if parent_entry is not None:
+                child_keys = parent_entry.get("children", [])
+
         for child_key in child_keys:
-            if child_key in visited or child_key == "_meta":
+            if child_key in visited:
                 continue
             visited.add(child_key)
-            child_entry = data.get(child_key)
+            child_entry = _load_scope(project_dir, child_key)
             if child_entry is not None:
                 if check_staleness:
                     child_stale, _ = _check_staleness_with_index(
@@ -491,35 +700,36 @@ def mark_stale_cascade(project_dir: str, scope: str) -> dict:
     Clears file_hashes so _check_staleness detects them as needing re-analysis.
     """
     scope = normalize_scope(scope)
-    data = _load_cache(project_dir)
+    _ensure_cache(project_dir)
 
     marked: list[str] = []
 
     # Mark the scope itself
-    if scope in data and scope != "_meta":
-        data[scope]["file_hashes"] = {}
+    entry = _load_scope(project_dir, scope)
+    if entry is not None:
+        entry["file_hashes"] = {}
+        _save_scope(project_dir, scope, entry)
         marked.append(scope)
 
     # Walk up through ancestors
     current = scope
     visited: set[str] = {scope}
     while True:
-        entry = data.get(current)
-        if entry is None:
+        current_entry = _load_scope(project_dir, current)
+        if current_entry is None:
             break
-        parent = entry.get("parent")
-        if parent is None or parent == "_meta":
+        parent = current_entry.get("parent")
+        if parent is None:
             break
         if parent in visited:
             break
         visited.add(parent)
-        if parent in data:
-            data[parent]["file_hashes"] = {}
+        parent_entry = _load_scope(project_dir, parent)
+        if parent_entry is not None:
+            parent_entry["file_hashes"] = {}
+            _save_scope(project_dir, parent, parent_entry)
             if parent not in marked:
                 marked.append(parent)
         current = parent
-
-    if marked:
-        _save_cache(project_dir, data)
 
     return {"marked": marked}
