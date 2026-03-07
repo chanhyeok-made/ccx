@@ -17,14 +17,14 @@ ccx (Claude Code eXtension) is a Claude Code native extension that provides a pr
 With pip (editable install):
 
 ```bash
-cd llmanager
+cd ccx
 pip install -e .
 ```
 
 Or with Poetry:
 
 ```bash
-cd llmanager
+cd ccx
 poetry install
 ```
 
