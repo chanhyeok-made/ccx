@@ -304,6 +304,7 @@ def _write_hook_settings(project: Path, force: bool):
         "SubagentStart",
         "SubagentStop",
         "Stop",
+        "Notification",
     ]:
         hooks[event] = [{"matcher": "", "hooks": [hook_entry]}]
 

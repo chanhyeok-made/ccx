@@ -95,6 +95,18 @@
           }
         ]
       }
+    ],
+    "Notification": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/log_event.sh",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }
