@@ -28,7 +28,7 @@ SCOPES_SUBDIR = "scopes"
 SCOPE_FILE = "_scope.json"
 META_FILE = "_meta.json"
 CACHE_VERSION = 2
-MAX_SCOPES = 200
+MAX_SCOPES = 5000
 STALENESS_THRESHOLD_SECONDS = 0  # any change after cached_at -> stale
 
 # Legacy flat-file name (for migration)
@@ -53,6 +53,7 @@ class CacheEntry:
     file_hashes: dict[str, str] = field(default_factory=dict)  # {relative_path: git_blob_hash}
     children: list[str] = field(default_factory=list)  # child scope keys
     parent: str | None = None  # parent scope key
+    ambiguities: list[dict] = field(default_factory=list)  # [{question, context, answer}]
 
 
 # ---------------------------------------------------------------------------
@@ -459,6 +460,7 @@ def save_analysis_cache(
     children: list[str] | None = None,
     parent: str | None = None,
     scope_tree: dict[str, list[str]] | None = None,
+    ambiguities: list[dict] | None = None,
 ) -> dict:
     """Save or update analysis cache for a scope.
 
@@ -481,6 +483,7 @@ def save_analysis_cache(
         file_hashes=file_hashes or {},
         children=children or [],
         parent=parent,
+        ambiguities=ambiguities or [],
     )
 
     _save_scope(project_dir, scope, asdict(entry))
@@ -537,6 +540,185 @@ def list_cached_scopes(project_dir: str) -> list[dict]:
             "key_files_count": len(entry.get("key_files", [])),
         })
     return result
+
+
+def _collect_pending(project_dir: str) -> list[dict]:
+    """Collect all scopes with empty summary (needing analysis)."""
+    _ensure_cache(project_dir)
+    all_entries = _list_all_scopes(project_dir)
+
+    pending: list[dict] = []
+    for entry in all_entries:
+        if entry.get("summary"):
+            continue
+        stype = "package" if entry.get("children") else "module"
+        pending.append({
+            "key": entry.get("scope", ""),
+            "type": stype,
+            "files": entry.get("key_files", []),
+            "parent": entry.get("parent"),
+            "children": entry.get("children", []),
+        })
+    return pending
+
+
+def get_pending_scopes(
+    project_dir: str,
+    scope_type: str = "all",
+    offset: int = 0,
+    limit: int = 50,
+    prefix: str = "",
+) -> dict:
+    """Get scopes that need analysis (empty summary), paginated.
+
+    Returns scopes sorted: modules first (by key), then packages by depth
+    (deepest first, so children are analyzed before parents).
+
+    Args:
+        project_dir: Project root directory path.
+        scope_type: Filter by type — "module", "package", or "all".
+        offset: Number of scopes to skip (for pagination).
+        limit: Max scopes to return per page.
+        prefix: Filter scopes whose key starts with this prefix (e.g. "src/api").
+
+    Returns:
+        {total_pending, offset, limit, has_more, scopes: [{key, type, files, parent, children}]}
+    """
+    pending = _collect_pending(project_dir)
+
+    # Apply filters
+    if scope_type != "all":
+        pending = [s for s in pending if s["type"] == scope_type]
+    if prefix:
+        pending = [s for s in pending if s["key"].startswith(prefix)]
+
+    # Sort: modules first (by key), then packages by depth descending
+    def _sort_key(s: dict) -> tuple:
+        is_pkg = 1 if s["type"] == "package" else 0
+        depth = -s["key"].count("/") if is_pkg else 0
+        return (is_pkg, depth, s["key"])
+
+    pending.sort(key=_sort_key)
+
+    total = len(pending)
+    page = pending[offset : offset + limit]
+
+    return {
+        "total_pending": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + limit < total,
+        "scopes": page,
+    }
+
+
+def get_pending_summary(project_dir: str, group_depth: int = 1) -> dict:
+    """Get a compact summary of pending scopes grouped by top-level directory.
+
+    Args:
+        project_dir: Project root directory path.
+        group_depth: Number of path segments to use for grouping (default 1).
+
+    Returns:
+        {total_pending, module_count, package_count,
+         groups: [{name, module_count, package_count, total}]}
+    """
+    pending = _collect_pending(project_dir)
+
+    module_count = 0
+    package_count = 0
+    groups: dict[str, dict] = {}
+
+    for s in pending:
+        parts = s["key"].split("/")
+        group_name = "/".join(parts[:group_depth]) if len(parts) >= group_depth else s["key"]
+
+        if group_name not in groups:
+            groups[group_name] = {"name": group_name, "module_count": 0, "package_count": 0, "total": 0}
+
+        if s["type"] == "module":
+            module_count += 1
+            groups[group_name]["module_count"] += 1
+        else:
+            package_count += 1
+            groups[group_name]["package_count"] += 1
+        groups[group_name]["total"] += 1
+
+    # Sort groups by total descending
+    sorted_groups = sorted(groups.values(), key=lambda g: -g["total"])
+
+    return {
+        "total_pending": len(pending),
+        "module_count": module_count,
+        "package_count": package_count,
+        "groups": sorted_groups,
+    }
+
+
+def get_unresolved_ambiguities(
+    project_dir: str, offset: int = 0, limit: int = 20
+) -> dict:
+    """Get unresolved ambiguities across all scopes, paginated.
+
+    Returns:
+        {total_unresolved, offset, limit, has_more,
+         items: [{scope, question, context}]}
+    """
+    _ensure_cache(project_dir)
+    all_entries = _list_all_scopes(project_dir)
+
+    items: list[dict] = []
+    for entry in all_entries:
+        for amb in entry.get("ambiguities", []):
+            if not amb.get("answer"):
+                items.append({
+                    "scope": entry.get("scope", ""),
+                    "question": amb.get("question", ""),
+                    "context": amb.get("context", ""),
+                })
+
+    items.sort(key=lambda x: x["scope"])
+    total = len(items)
+    page = items[offset : offset + limit]
+
+    return {
+        "total_unresolved": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + limit < total,
+        "items": page,
+    }
+
+
+def resolve_ambiguity(
+    project_dir: str, scope: str, question: str, answer: str
+) -> dict:
+    """Resolve an ambiguity by saving the user's answer.
+
+    Matches by question text within the scope's ambiguities list.
+
+    Returns:
+        {status: "resolved"/"not_found", scope, question}
+    """
+    scope = normalize_scope(scope)
+    _ensure_cache(project_dir)
+    entry = _load_scope(project_dir, scope)
+
+    if entry is None:
+        return {"status": "not_found", "scope": scope, "question": question}
+
+    matched = False
+    for amb in entry.get("ambiguities", []):
+        if amb.get("question") == question:
+            amb["answer"] = answer
+            matched = True
+            break
+
+    if not matched:
+        return {"status": "not_found", "scope": scope, "question": question}
+
+    _save_scope(project_dir, scope, entry)
+    return {"status": "resolved", "scope": scope, "question": question}
 
 
 def build_scope_tree(project_dir: str) -> dict:
@@ -625,9 +807,8 @@ def build_scope_tree(project_dir: str) -> dict:
         "total_scopes": len(scopes),
         "packages": packages,
         "modules": modules,
-        "scope_tree": scope_tree,
-        "new_scopes": new_scopes,
-        "stale_scopes": stale_scopes,
+        "new_scope_count": len(new_scopes),
+        "stale_scope_count": len(stale_scopes),
     }
 
 

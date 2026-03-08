@@ -4,7 +4,26 @@
       "Bash(source .venv/bin/activate)",
       "Bash(pip install:*)",
       "Bash(python:*)",
-      "WebSearch"
+      "WebSearch",
+      "mcp__ccx__load_project_context",
+      "mcp__ccx__get_session",
+      "Bash(chmod +x:*)",
+      "Bash(CLAUDE_PROJECT_DIR=/tmp/test-ccx bash:*)",
+      "Bash(python3:*)",
+      "mcp__ccx__check_rules",
+      "Bash(git log:*)",
+      "mcp__ccx__record_execution",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(for dir in analyze commit review run)",
+      "Bash(do echo \"=== $dir ===\")",
+      "Read(//Users/chanhyeok/PycharmProjects/ccx/src/ccx/skills/**)",
+      "Bash(done)",
+      "mcp__ccx__save_analysis_cache",
+      "Bash(.venv/bin/pip install:*)",
+      "mcp__ccx__mark_stale_cascade",
+      "Bash(PYTHONPATH=src .venv/bin/python:*)"
     ]
   }
 }

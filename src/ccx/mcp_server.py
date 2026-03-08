@@ -20,6 +20,10 @@ from ccx.analysis_cache import (
     build_scope_tree as _build_scope_tree,
     get_scope_with_children as _get_scope_children,
     mark_stale_cascade as _mark_stale,
+    get_pending_scopes as _get_pending,
+    get_pending_summary as _get_pending_summary,
+    get_unresolved_ambiguities as _get_unresolved,
+    resolve_ambiguity as _resolve_ambiguity,
 )
 
 mcp = FastMCP("ccx")
@@ -195,6 +199,7 @@ def save_analysis_cache(
     children: list[str] | None = None,
     parent: str | None = None,
     scope_tree: dict[str, list[str]] | None = None,
+    ambiguities: list[dict] | None = None,
 ) -> dict:
     """Save analysis results for a scope to cache for future reuse.
 
@@ -213,6 +218,7 @@ def save_analysis_cache(
         children: List of child scope keys in the scope hierarchy.
         parent: Parent scope key in the scope hierarchy.
         scope_tree: Full scope tree mapping to store in cache metadata.
+        ambiguities: List of ambiguities found during analysis. Each: {question, context, answer}.
 
     Returns:
         Dict with status and scope.
@@ -232,6 +238,7 @@ def save_analysis_cache(
         children=children,
         parent=parent,
         scope_tree=scope_tree,
+        ambiguities=ambiguities,
     )
 
 
@@ -268,15 +275,105 @@ def trigger_index(project_dir: str) -> dict:
 
     Scans the project for modules/packages, builds parent-children relationships,
     and identifies new/stale scopes. Does NOT perform code analysis —
-    returns scope metadata for the caller to analyze selectively.
+    returns compact counts for the caller to decide what to analyze.
+
+    Use get_pending_scopes() to retrieve the actual scopes needing analysis, paginated.
 
     Args:
         project_dir: Project root directory path.
 
     Returns:
-        Dict with total_scopes, packages, modules, scope_tree, new_scopes, stale_scopes.
+        Dict with total_scopes, packages, modules, new_scope_count, stale_scope_count.
     """
     return _build_scope_tree(project_dir)
+
+
+@mcp.tool()
+@_with_logging
+def get_pending_scopes(
+    project_dir: str,
+    scope_type: str = "all",
+    offset: int = 0,
+    limit: int = 50,
+    prefix: str = "",
+) -> dict:
+    """Get scopes needing analysis (empty summary), paginated.
+
+    Returns scopes sorted: modules first, then packages by depth (deepest first).
+    Use after trigger_index() to get work batches for indexing.
+
+    Args:
+        project_dir: Project root directory path.
+        scope_type: Filter — "module", "package", or "all" (default).
+        offset: Skip this many scopes (for pagination).
+        limit: Max scopes per page (default 50).
+        prefix: Filter scopes whose key starts with this prefix (e.g. "src/api").
+
+    Returns:
+        Dict with total_pending, offset, limit, has_more, scopes list.
+    """
+    return _get_pending(project_dir, scope_type, offset, limit, prefix)
+
+
+@mcp.tool()
+@_with_logging
+def get_pending_summary(project_dir: str, group_depth: int = 1) -> dict:
+    """Get a compact summary of pending scopes grouped by top-level directory.
+
+    Use after trigger_index() to assess the scale of indexing work
+    and present groups to the user for selection.
+
+    Args:
+        project_dir: Project root directory path.
+        group_depth: Number of path segments for grouping (default 1).
+
+    Returns:
+        Dict with total_pending, module_count, package_count, groups list.
+    """
+    return _get_pending_summary(project_dir, group_depth)
+
+
+@mcp.tool()
+@_with_logging
+def get_unresolved_ambiguities(
+    project_dir: str, offset: int = 0, limit: int = 20
+) -> dict:
+    """Get unresolved ambiguities across all cached scopes, paginated.
+
+    Ambiguities are questions the AI couldn't answer from code alone during indexing.
+    Users can resolve them to improve future analysis quality.
+
+    Args:
+        project_dir: Project root directory path.
+        offset: Skip this many items (for pagination).
+        limit: Max items per page (default 20).
+
+    Returns:
+        Dict with total_unresolved, offset, limit, has_more, items list.
+        Each item: {scope, question, context}.
+    """
+    return _get_unresolved(project_dir, offset, limit)
+
+
+@mcp.tool()
+@_with_logging
+def resolve_ambiguity(
+    project_dir: str, scope: str, question: str, answer: str
+) -> dict:
+    """Resolve an ambiguity by saving the user's answer.
+
+    Matches by exact question text within the scope's ambiguities.
+
+    Args:
+        project_dir: Project root directory path.
+        scope: Scope key containing the ambiguity.
+        question: The exact question text to match.
+        answer: The user's answer to save.
+
+    Returns:
+        Dict with status (resolved/not_found), scope, question.
+    """
+    return _resolve_ambiguity(project_dir, scope, question, answer)
 
 
 @mcp.tool()
