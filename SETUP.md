@@ -41,18 +41,32 @@ poetry install
 
 ### 3. Register ccx as a Claude Code plugin
 
+Claude Code plugins are installed through **marketplaces**. ccx includes a built-in marketplace.
+
 ```bash
-claude plugin install ~/ccx
-#                     ^^^^
-# This is the path to the ccx directory you cloned in step 1.
+# Step A: Register the ccx marketplace (one-time setup)
+claude plugin marketplace add ~/ccx/.claude-plugin
+#                              ^^^^^^^^^^^^^^^^^^^
+# This is the path to the .claude-plugin/ directory inside your cloned ccx.
 # Use the actual path on YOUR machine. For example:
-#   macOS:   claude plugin install ~/ccx
-#            claude plugin install /Users/yourname/ccx
-#   Linux:   claude plugin install /home/yourname/ccx
-#   Windows: claude plugin install C:\Users\yourname\ccx
+#   macOS:   claude plugin marketplace add ~/ccx/.claude-plugin
+#   Linux:   claude plugin marketplace add /home/yourname/ccx/.claude-plugin
+#   Windows: claude plugin marketplace add C:\Users\yourname\ccx\.claude-plugin
+#
+# Or use the GitHub URL directly (no need to clone first):
+#   claude plugin marketplace add chanhyeok-made/ccx
+
+# Step B: Install the ccx plugin
+claude plugin install ccx@ccx
 ```
 
-This registers the plugin with Claude Code, making all skills, hooks, and MCP tools available in any project where the plugin is active. The plugin reads its configuration from `.claude-plugin/plugin.json` inside the ccx directory.
+> **Quick test without installing:** You can also try ccx in a single session without persistent installation:
+> ```bash
+> claude --plugin-dir ~/ccx/.claude-plugin
+> ```
+> This loads the plugin for that session only — it won't persist when you restart Claude Code.
+
+This registers the plugin with Claude Code, making all skills, hooks, and MCP tools available in any project where the plugin is active.
 
 ## Quick Start
 
