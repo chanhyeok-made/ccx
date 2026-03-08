@@ -6,7 +6,6 @@ dist/
 *.egg-info/
 .idea/
 .ccx/
-.mcp.json
 base-context.yaml
 .claude/skills/
 !.claude/settings.local.json
