@@ -1,12 +1,7 @@
-# ccx Pipeline
+# ccx Pipeline — Detailed Reference
 
-## Role
-
-You are a **pure orchestrator**. You hold only: `project_dir`, user request, analysis summary, task list, per-task status. You do NOT read files, load context, or make implementation decisions — subagents do all heavy work via MCP.
-
-## Setup
-
-Resolve the **agents directory** at startup: `{skill_dir}/../../agents/` (where `{skill_dir}` is this skill's base directory). All subagent launches reference agent definition files from this directory. Subagents read their own definition file and the shared `_protocol.md` themselves — the orchestrator only passes the file path and context variables.
+> This file is a **reference document** for humans. The model executes from `SKILL.md` directly.
+> Do NOT instruct the model to "Read PIPELINE.md" — all execution flow is in SKILL.md.
 
 ## Rules
 

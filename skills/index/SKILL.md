@@ -2,7 +2,7 @@
 name: index
 description: "Perform code-level analysis on all project scopes and cache results"
 argument-hint: "[--force to re-analyze all scopes, or leave empty for incremental]"
-allowed-tools: Read, Grep, Glob, Bash, Agent, mcp__ccx__load_project_context, mcp__ccx__trigger_index, mcp__ccx__get_analysis_cache, mcp__ccx__save_analysis_cache, mcp__ccx__list_cached_scopes
+allowed-tools: Read, Grep, Glob, Bash, Agent, mcp__ccx__load_project_context, mcp__ccx__trigger_index, mcp__ccx__get_analysis_cache, mcp__ccx__save_analysis_cache, mcp__ccx__invalidate_analysis_cache, mcp__ccx__list_cached_scopes
 ---
 
 # Project Code-Level Indexing
@@ -48,7 +48,18 @@ From the targets, compute **topological order** (leaf-first):
 
 If zero targets exist, output "All scopes are up to date." and stop.
 
-### 4. Analyze Each Scope
+### 4. Permission Pre-flight
+
+Before launching subagents, verify MCP write access by calling:
+
+```
+mcp__ccx__save_analysis_cache(project_dir, scope="_preflight", summary="permission check", interfaces=[], dependencies=[], patterns=[], known_issues=[], key_files=[], annotations=[], file_hashes={}, children=[], parent=null, cached_by_request="ccx:index")
+```
+
+- **Approved** → call `mcp__ccx__invalidate_analysis_cache(project_dir, scope="_preflight")` to clean up. Proceed.
+- **Denied** → output `⚠️ save_analysis_cache 권한이 필요합니다. 도구를 허용 후 다시 실행해주세요.` and stop.
+
+### 5. Analyze Each Scope
 
 For each target scope in topological order, output progress:
 
@@ -56,25 +67,21 @@ For each target scope in topological order, output progress:
 ### [N/M] Analyzing: {scope_key}
 ```
 
-**Agents directory:** Resolve at startup: `{skill_dir}/../../agents/` (where `{skill_dir}` is this skill's base directory).
-
 #### For module scopes (type = "module"):
 
-Launch `Agent` with `subagent_type: "general-purpose"`. Prompt:
+Launch `Agent` with `subagent_type: "ccx:module-analyzer"`. Prompt:
 
-> Read `{agents_dir}/module-analyzer.md` and execute its instructions.
 > project_dir="{project_dir}"
 > scope_key="{scope_key}", files={files list}, parent_key="{parent_key}"
 
 #### For package scopes (type = "package"):
 
-Launch `Agent` with `subagent_type: "general-purpose"`. Prompt:
+Launch `Agent` with `subagent_type: "ccx:package-synthesizer"`. Prompt:
 
-> Read `{agents_dir}/package-synthesizer.md` and execute its instructions.
 > project_dir="{project_dir}"
 > scope_key="{scope_key}", children={children scope keys}, package_files={direct files}, parent_key="{parent_key}"
 
-### 5. Summary
+### 6. Summary
 
 After all scopes are analyzed, output a summary table:
 
