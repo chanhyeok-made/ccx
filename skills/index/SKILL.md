@@ -1,7 +1,6 @@
 ---
 name: index
 description: "Perform code-level analysis on all project scopes and cache results"
-disable-model-invocation: true
 argument-hint: "[--force to re-analyze all scopes, or leave empty for incremental]"
 allowed-tools: Read, Grep, Glob, Bash, Agent, mcp__ccx__load_project_context, mcp__ccx__trigger_index, mcp__ccx__get_analysis_cache, mcp__ccx__save_analysis_cache, mcp__ccx__list_cached_scopes
 ---
