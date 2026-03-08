@@ -18,7 +18,7 @@
       "Bash(git push:*)",
       "Bash(for dir in analyze commit review run)",
       "Bash(do echo \"=== $dir ===\")",
-      "Read(//Users/chanhyeok/PycharmProjects/ccx/src/ccx/skills/**)",
+      "Read(//Users/chanhyeok/PycharmProjects/ccx/.claude-plugin/skills/**)",
       "Bash(done)",
       "mcp__ccx__save_analysis_cache",
       "Bash(.venv/bin/pip install:*)",

@@ -72,7 +72,7 @@ Before analysis, ensure the analysis cache is warmed.
 
 1. Call `mcp__ccx__trigger_index("{project_dir}")` to discover scopes and check for `new_scopes`.
 2. If `new_scopes` is non-empty OR many scopes lack cached analysis:
-   - Use the `Skill` tool to invoke `/project:index` (no arguments) in incremental mode to analyze all stale/new scopes.
+   - Use the `Skill` tool to invoke `/ccx:index` (no arguments) in incremental mode to analyze all stale/new scopes.
    - This is automatic — no user checkpoint needed.
 3. If all scopes are already cached and fresh, skip this phase with: `Index: all scopes up to date.`
 

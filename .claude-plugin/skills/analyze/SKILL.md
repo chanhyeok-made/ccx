@@ -8,9 +8,9 @@ allowed-tools: Read, Grep, Glob, AskUserQuestion, mcp__ccx__load_project_context
 
 # Analyze Request (Standalone)
 
-This is the **standalone** analysis skill (`/project:analyze`). You interact directly with the user.
+This is the **standalone** analysis skill (`/ccx:analyze`). You interact directly with the user.
 
-> **Note:** When used inside `/project:run`, the pipeline's own Analyze phase (PIPELINE.md Phase 1) takes precedence. That version runs as a subagent and does NOT use AskUserQuestion.
+> **Note:** When used inside `/ccx:run`, the pipeline's own Analyze phase (PIPELINE.md Phase 1) takes precedence. That version runs as a subagent and does NOT use AskUserQuestion.
 
 ## Steps
 

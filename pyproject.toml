@@ -1,10 +1,10 @@
 [tool.poetry]
 name = "ccx"
 version = "0.2.0"
-description = "Claude Code eXtension — project-aware development pipeline"
-authors = ["Your Name <you@example.com>"]
+description = "Claude Code plugin — project-aware development pipeline"
+authors = ["chanhyeok-made"]
 packages = [{include = "ccx", from = "src"}]
-include = ["ccx/skills/**/*.md", "ccx/base-context.example.yaml", "ccx/hooks/**/*.sh", "ccx/hooks/**/*.py"]
+include = ["ccx/base-context.example.yaml"]
 
 [tool.poetry.dependencies]
 python = "^3.11"

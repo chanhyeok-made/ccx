@@ -2,7 +2,7 @@
 
 ## What is ccx
 
-ccx (Claude Code eXtension) is a Claude Code native extension that provides a project-aware development pipeline through Skills and an MCP Server. Claude Code acts as the orchestrator; ccx supplies the skills (pipeline logic) and MCP tools (project context, session, analysis cache) that subagents consume.
+ccx (Claude Code eXtension) is a Claude Code plugin that provides a project-aware development pipeline through Skills and an MCP Server. It is distributed as a Claude Code plugin (`.claude-plugin/`), which bundles skills, hooks, and MCP server configuration into a single installable unit. Claude Code acts as the orchestrator; ccx supplies the skills (pipeline logic) and MCP tools (project context, session, analysis cache) that subagents consume.
 
 ## Prerequisites
 
@@ -14,68 +14,72 @@ ccx (Claude Code eXtension) is a Claude Code native extension that provides a pr
 
 ## Installation
 
-With pip (editable install):
+Install ccx as a Claude Code plugin:
+
+```bash
+claude plugin install /path/to/ccx
+```
+
+This registers the plugin with Claude Code, making all skills, hooks, and MCP tools available in any project where the plugin is active. The plugin reads its configuration from `.claude-plugin/plugin.json`.
+
+### Python Dependencies
+
+The ccx MCP server requires the Python package to be installed:
 
 ```bash
 cd ccx
 pip install -e .
-```
-
-Or with Poetry:
-
-```bash
-cd ccx
+# or with Poetry:
 poetry install
 ```
-
-Both methods install the `ccx` CLI command (entry point: `ccx.cli:main`).
 
 ## Quick Start
 
 ```bash
-# 1. Initialize ccx in your project
+# 1. Install the plugin (one-time)
+claude plugin install /path/to/ccx
+
+# 2. Initialize ccx in your project (generates base-context.yaml and .ccx/)
 ccx init /path/to/your/project
 
-# 2. (Optional) Review the auto-generated base-context.yaml
+# 3. (Optional) Review the auto-generated base-context.yaml
 #    Edit it to add project-specific exception rules or architecture notes.
 
-# 3. Start Claude Code in your project and run the pipeline
+# 4. Start Claude Code in your project and run the pipeline
 cd /path/to/your/project
 claude
-# Then use: /project:run [your request]
+# Then use: /ccx:run [your request]
 ```
 
 `ccx init` performs the following:
-- Copies skill templates to `.claude/skills/`
-- Copies hook scripts to `.claude/hooks/`
-- Configures hooks in `.claude/settings.json`
-- Creates `.mcp.json` with the ccx MCP server config
 - Scans the project and generates `base-context.yaml`
 - Creates the `.ccx/` directory (session data, logs, analysis cache)
+
+Skills, hooks, and MCP configuration are provided by the plugin and do not need to be copied into the project.
 
 ## CLI Commands
 
 | Command | Description | Key Flags |
 |---------|-------------|-----------|
-| `ccx init [project_dir]` | Initialize ccx in a project directory | `--force / -f` -- overwrite existing files |
-| `ccx update [project_dir]` | Update skill templates and hooks to latest version | -- |
-| `ccx status [project_dir]` | Check ccx installation status (skills, hooks, MCP config, base-context) | -- |
+| `ccx init [project_dir]` | Initialize ccx in a project directory (generates `base-context.yaml` and `.ccx/`) | `--force / -f` -- overwrite existing files |
+| `ccx update [project_dir]` | Upgrade ccx package to latest version | -- |
+| `ccx status [project_dir]` | Check ccx installation status (base-context, MCP config) | -- |
 | `ccx index [project_dir]` | Discover and index project scopes for analysis caching | `--reset` -- clear cache before indexing; `--verbose / -v` -- show scope tree |
 
 `project_dir` defaults to `.` (current directory) for all commands.
 
 ## Skills
 
-Skills are invoked inside Claude Code with the `/project:` prefix.
+Skills are invoked inside Claude Code with the `/ccx:` prefix.
 
 | Skill | Description |
 |-------|-------------|
-| `/project:run [request]` | Full development pipeline: analyze, plan, implement, review, commit. Orchestrates subagents through all phases with mandatory checkpoints. |
-| `/project:analyze [request]` | Standalone analysis: analyze a request and produce structured requirements. |
-| `/project:review [files or scope]` | Review recent code changes against project exception rules. |
-| `/project:commit [context]` | Generate and create a conventional commit for current changes. |
-| `/project:index [--force]` | Perform code-level analysis on all project scopes and cache results. Incremental by default; `--force` re-analyzes everything. |
-| `/project:resolve` | Manage annotations and resolve ambiguities flagged during indexing. |
+| `/ccx:run [request]` | Full development pipeline: analyze, plan, implement, review, commit. Orchestrates subagents through all phases with mandatory checkpoints. |
+| `/ccx:analyze [request]` | Standalone analysis: analyze a request and produce structured requirements. |
+| `/ccx:review [files or scope]` | Review recent code changes against project exception rules. |
+| `/ccx:commit [context]` | Generate and create a conventional commit for current changes. |
+| `/ccx:index [--force]` | Perform code-level analysis on all project scopes and cache results. Incremental by default; `--force` re-analyzes everything. |
+| `/ccx:resolve` | Manage annotations and resolve ambiguities flagged during indexing. |
 
 ## MCP Tools
 
@@ -105,15 +109,20 @@ The ccx MCP server (`ccx.mcp_server`) exposes the following tools:
 ```
 Claude Code (orchestrator)
     |
-    |-- Skills (.claude/skills/)      -- pipeline logic, subagent prompts
-    |-- MCP Tools (.mcp.json)         -- project context, session, analysis cache
+    |-- Plugin (.claude-plugin/)
+    |       |-- Skills              -- pipeline logic, subagent prompts
+    |       |-- Hooks               -- event logging
+    |       +-- MCP config          -- server connection settings
     |
-    +-- Subagents                     -- spawned by orchestrator for each phase
+    |-- MCP Server (ccx.mcp_server) -- project context, session, analysis cache
+    |
+    +-- Subagents                   -- spawned by orchestrator for each phase
             |
-            +-- MCP calls             -- subagents load context directly via MCP
+            +-- MCP calls           -- subagents load context directly via MCP
 ```
 
 Key design decisions:
+- **Plugin-based distribution.** Skills, hooks, and MCP configuration are bundled in `.claude-plugin/` and installed via `claude plugin install`. No manual copying of files into `.claude/` is needed.
 - **Main agent = pure orchestrator.** It coordinates phases and handles user interaction but does not read files or load project context itself.
 - **All heavy work is delegated to subagents.** Each subagent loads context via MCP tools directly.
 - **User interaction happens only through the main agent.** Subagents return structured status (COMPLETE / NEEDS_CONTEXT) and never prompt the user.
@@ -122,6 +131,28 @@ Key design decisions:
 ## Directory Structure
 
 ```
+.claude-plugin/
+    plugin.json             -- Plugin manifest (skills, hooks, MCP config)
+    mcp.json                -- MCP server connection configuration
+    skills/
+        run/
+            SKILL.md        -- /ccx:run entry point
+            PIPELINE.md     -- Detailed pipeline logic
+        analyze/
+            SKILL.md        -- /ccx:analyze
+        review/
+            SKILL.md        -- /ccx:review
+        commit/
+            SKILL.md        -- /ccx:commit
+        index/
+            SKILL.md        -- /ccx:index
+        resolve/
+            SKILL.md        -- /ccx:resolve
+    hooks/
+        hooks.json          -- Hook configuration (event matchers)
+        log_event.sh        -- Hook script for event logging
+        log_event.py        -- Python handler for event logging
+
 src/ccx/
     __init__.py
     __main__.py
@@ -133,22 +164,6 @@ src/ccx/
     analysis_cache.py       -- Scope-based analysis cache with staleness detection
     logger.py               -- MCP tool call logging
     base-context.example.yaml
-    hooks/
-        log_event.sh        -- Hook script for event logging
-    skills/
-        run/
-            SKILL.md        -- /project:run entry point
-            PIPELINE.md     -- Detailed pipeline logic
-        analyze/
-            SKILL.md        -- /project:analyze
-        review/
-            SKILL.md        -- /project:review
-        commit/
-            SKILL.md        -- /project:commit
-        index/
-            SKILL.md        -- /project:index
-        resolve/
-            SKILL.md        -- /project:resolve
 ```
 
 ## Dependencies

@@ -82,7 +82,7 @@ Launch `Agent` with `subagent_type: "general-purpose"`. Prompt:
 >    - All analysis fields above
 >    - `file_hashes` = `{path: blob_hash}` from step 2
 >    - `children` = `[]`, `parent` = `"{parent_key}"` (or null)
->    - `cached_by_request` = `"project:index"`
+>    - `cached_by_request` = `"ccx:index"`
 >
 > Return: `STATUS: COMPLETE` with a one-line summary of the module.
 
@@ -112,7 +112,7 @@ Launch `Agent` with `subagent_type: "general-purpose"`. Prompt:
 >    - All fields above
 >    - `file_hashes` = hashes of direct package files only
 >    - `children` = `[{child_keys}]`, `parent` = `"{parent_key}"` (or null)
->    - `cached_by_request` = `"project:index"`
+>    - `cached_by_request` = `"ccx:index"`
 >
 > Return: `STATUS: COMPLETE` with a one-line summary of the package.
 
@@ -141,6 +141,6 @@ All scopes are now cached and available for future analysis.
 
 ## Pipeline Integration
 
-When called from `/project:run` (Phase 0), this skill receives no `$ARGUMENTS`. It runs in incremental mode and returns its summary to the orchestrator. The orchestrator can then proceed to Phase 1 (Analyze) with a fully warmed cache.
+When called from `/ccx:run` (Phase 0), this skill receives no `$ARGUMENTS`. It runs in incremental mode and returns its summary to the orchestrator. The orchestrator can then proceed to Phase 1 (Analyze) with a fully warmed cache.
 
 Arguments: $ARGUMENTS

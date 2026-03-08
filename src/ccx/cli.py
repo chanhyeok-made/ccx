@@ -1,10 +1,9 @@
 """
 Setup CLI for ccx.
-Installs skills and MCP server configuration into target projects.
+Skills, hooks, and MCP configuration are handled by the plugin system
+(claude plugin install). This CLI manages base-context.yaml and .ccx/ directory.
 """
 
-import json
-import os
 import shutil
 import subprocess
 import sys
@@ -12,18 +11,7 @@ from pathlib import Path
 
 import click
 
-SKILLS_SOURCE = Path(__file__).parent / "skills"
-HOOKS_SOURCE = Path(__file__).parent / "hooks"
 GIT_REPO_URL = "git+https://github.com/chanhyeok-made/ccx.git"
-
-MCP_CONFIG = {
-    "mcpServers": {
-        "ccx": {
-            "command": sys.executable,
-            "args": ["-m", "ccx.mcp_server"],
-        }
-    }
-}
 
 
 @click.group()
@@ -39,81 +27,54 @@ def cli():
 def init(project_dir: str, force: bool):
     """Initialize ccx in a project directory.
 
-    Copies skill templates, creates .mcp.json, and sets up .ccx/ directory.
+    Creates base-context.yaml and .ccx/ directory.
+    Skills, hooks, and MCP config are managed by the plugin system.
     """
     project = Path(project_dir).resolve()
 
-    # 1. Copy skills to .claude/skills/
-    skills_dest = project / ".claude" / "skills"
-    _copy_skills(skills_dest, force)
-
-    # 2. Copy hooks to .claude/hooks/
-    hooks_dest = project / ".claude" / "hooks"
-    _copy_hooks(hooks_dest, force)
-
-    # 3. Configure hooks in .claude/settings.json
-    _write_hook_settings(project, force)
-
-    # 4. Create/update .mcp.json
-    _write_mcp_json(project, force)
-
-    # 5. Create base-context.yaml by scanning project
+    # 1. Create base-context.yaml by scanning project
     _create_base_context_starter(project, force)
 
-    # 6. Create .ccx/ directory and logs subdirectory
+    # 2. Create .ccx/ directory and logs subdirectory
     ccx_dir = _ensure_ccx_directory(project)
 
     click.echo("\nccx initialized successfully!")
-    click.echo(f"  Skills:       {skills_dest}")
-    click.echo(f"  Hooks:        {hooks_dest}")
-    click.echo(f"  MCP config:   {project / '.mcp.json'}")
+    click.echo(f"  Base context: {project / 'base-context.yaml'}")
     click.echo(f"  Session dir:  {ccx_dir}")
     click.echo("\nNext steps:")
     click.echo("  1. Edit base-context.yaml to describe your project")
-    click.echo("  2. Start Claude Code and use /project:run [request]")
+    click.echo("  2. Run 'claude plugin install' to set up skills, hooks, and MCP")
+    click.echo("  3. Start Claude Code and use /ccx:run [request]")
 
 
 @cli.command()
 @click.argument("project_dir", default=".", type=click.Path(exists=True))
-@click.option("--post-upgrade", is_flag=True, hidden=True,
-              help="Internal flag: run setup phase after package upgrade.")
-def update(project_dir: str, post_upgrade: bool):
-    """Upgrade ccx package to latest version and update project configuration."""
+def update(project_dir: str):
+    """Upgrade ccx package to latest version.
+
+    Skills, hooks, and MCP config are updated via the plugin system.
+    """
     project = Path(project_dir).resolve()
 
-    if not post_upgrade:
-        from ccx import __version__ as current_version
-        click.echo(f"Current version: {current_version}")
-        click.echo("Upgrading ccx package...")
+    from ccx import __version__ as current_version
+    click.echo(f"Current version: {current_version}")
+    click.echo("Upgrading ccx package...")
 
-        try:
-            subprocess.run(
-                [sys.executable, "-m", "pip", "install",
-                 "--no-cache-dir", "--force-reinstall", "-q",
-                 GIT_REPO_URL],
-                check=True, capture_output=True, text=True,
-            )
-        except subprocess.CalledProcessError as e:
-            click.echo(f"Package upgrade failed:\n{e.stderr}", err=True)
-            sys.exit(1)
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install",
+             "--no-cache-dir", "--force-reinstall", "-q",
+             GIT_REPO_URL],
+            check=True, capture_output=True, text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        click.echo(f"Package upgrade failed:\n{e.stderr}", err=True)
+        sys.exit(1)
 
-        click.echo("Applying updates...")
-        os.execv(sys.executable, [
-            sys.executable, "-m", "ccx.cli",
-            "update", "--post-upgrade", str(project),
-        ])
-
-    # Post-upgrade phase: runs with new code after re-exec
-    skills_dest = project / ".claude" / "skills"
-    _copy_skills(skills_dest, force=True)
-    hooks_dest = project / ".claude" / "hooks"
-    _copy_hooks(hooks_dest, force=True)
-    _write_hook_settings(project, force=True)
-    _write_mcp_json(project, force=False)
     _ensure_ccx_directory(project)
 
-    from ccx import __version__
-    click.echo(f"\nccx updated to version {__version__}!")
+    click.echo(f"\nccx package upgraded successfully!")
+    click.echo("Run 'claude plugin install' to update skills, hooks, and MCP config.")
 
 
 @cli.command()
@@ -123,17 +84,9 @@ def status(project_dir: str):
     project = Path(project_dir).resolve()
 
     checks = {
-        ".claude/skills/run/SKILL.md": (project / ".claude" / "skills" / "run" / "SKILL.md").exists(),
-        ".claude/skills/analyze/SKILL.md": (project / ".claude" / "skills" / "analyze" / "SKILL.md").exists(),
-        ".claude/skills/review/SKILL.md": (project / ".claude" / "skills" / "review" / "SKILL.md").exists(),
-        ".claude/skills/commit/SKILL.md": (project / ".claude" / "skills" / "commit" / "SKILL.md").exists(),
-        ".claude/skills/index/SKILL.md": (project / ".claude" / "skills" / "index" / "SKILL.md").exists(),
-        ".claude/skills/resolve/SKILL.md": (project / ".claude" / "skills" / "resolve" / "SKILL.md").exists(),
-        ".claude/hooks/log_event.sh": (project / ".claude" / "hooks" / "log_event.sh").exists(),
-        ".claude/hooks/log_event.py": (project / ".claude" / "hooks" / "log_event.py").exists(),
-        ".mcp.json": (project / ".mcp.json").exists(),
         "base-context.yaml": (project / "base-context.yaml").exists(),
         ".ccx/": (project / ".ccx").is_dir(),
+        ".claude-plugin/plugin.json": (project / ".claude-plugin" / "plugin.json").exists(),
     }
 
     click.echo(f"ccx status for: {project}\n")
@@ -160,7 +113,7 @@ def status(project_dir: str):
     if all_ok:
         click.echo("\nAll components installed.")
     else:
-        click.echo("\nSome components missing. Run 'ccx init' to set up.")
+        click.echo("\nSome components missing. Run 'ccx init' and 'claude plugin install'.")
 
 
 @cli.command()
@@ -217,7 +170,7 @@ def index(project_dir: str, reset: bool, verbose: bool):
                 for child in children:
                     click.echo(f"    ├── {child}")
 
-    click.echo("\nDone. Run '/project:run' or '/project:analyze' to trigger code-level analysis.")
+    click.echo("\nDone. Run '/ccx:run' or '/ccx:analyze' to trigger code-level analysis.")
 
 
 def _ensure_ccx_directory(project: Path):
@@ -226,117 +179,6 @@ def _ensure_ccx_directory(project: Path):
     ccx_dir.mkdir(exist_ok=True)
     (ccx_dir / "logs").mkdir(exist_ok=True)
     return ccx_dir
-
-
-def _copy_skills(dest: Path, force: bool):
-    """Copy skill templates from package to project."""
-    if not SKILLS_SOURCE.exists():
-        click.echo(f"Warning: Skills source not found at {SKILLS_SOURCE}", err=True)
-        dest.mkdir(parents=True, exist_ok=True)
-        return
-
-    for skill_dir in SKILLS_SOURCE.iterdir():
-        if not skill_dir.is_dir():
-            continue
-
-        target = dest / skill_dir.name
-        if target.exists() and not force:
-            click.echo(f"  Skipping {skill_dir.name}/ (exists, use --force to overwrite)")
-            continue
-
-        target.mkdir(parents=True, exist_ok=True)
-        for f in skill_dir.iterdir():
-            if f.is_file():
-                shutil.copy2(f, target / f.name)
-                click.echo(f"  Copied {skill_dir.name}/{f.name}")
-
-
-def _copy_hooks(dest: Path, force: bool):
-    """Copy hook scripts from package to project."""
-    if not HOOKS_SOURCE.exists():
-        click.echo(f"Warning: Hooks source not found at {HOOKS_SOURCE}", err=True)
-        return
-
-    dest.mkdir(parents=True, exist_ok=True)
-    for f in HOOKS_SOURCE.iterdir():
-        if not f.is_file():
-            continue
-
-        target = dest / f.name
-        if target.exists() and not force:
-            click.echo(f"  Skipping hooks/{f.name} (exists, use --force to overwrite)")
-            continue
-
-        shutil.copy2(f, target)
-        os.chmod(target, 0o755)
-        click.echo(f"  Copied hooks/{f.name}")
-
-
-def _write_hook_settings(project: Path, force: bool):
-    """Add hook configuration to .claude/settings.json."""
-    settings_path = project / ".claude" / "settings.json"
-
-    existing = {}
-    if settings_path.exists():
-        raw = settings_path.read_text(encoding="utf-8")
-        try:
-            existing = json.loads(raw)
-        except json.JSONDecodeError:
-            click.echo(
-                f"  Warning: {settings_path} is malformed JSON, skipping hook config",
-                err=True,
-            )
-            return
-
-    if "hooks" in existing and not force:
-        click.echo("  settings.json already has hooks config, skipping")
-        return
-
-    hook_entry = {
-        "type": "command",
-        "command": '"$CLAUDE_PROJECT_DIR"/.claude/hooks/log_event.sh',
-        "timeout": 10,
-    }
-
-    hooks = {}
-    for event in [
-        "PreToolUse",
-        "PostToolUse",
-        "PostToolUseFailure",
-        "UserPromptSubmit",
-        "SubagentStart",
-        "SubagentStop",
-        "Stop",
-        "Notification",
-    ]:
-        hooks[event] = [{"matcher": "", "hooks": [hook_entry]}]
-
-    existing["hooks"] = hooks
-
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-    settings_path.write_text(
-        json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    click.echo("  Configured hooks in .claude/settings.json")
-
-
-def _write_mcp_json(project: Path, force: bool):
-    """Create or merge .mcp.json."""
-    mcp_path = project / ".mcp.json"
-
-    if mcp_path.exists() and not force:
-        existing = json.loads(mcp_path.read_text(encoding="utf-8"))
-        servers = existing.get("mcpServers", {})
-        if "ccx" in servers:
-            click.echo("  .mcp.json already has ccx config, skipping")
-            return
-        servers["ccx"] = MCP_CONFIG["mcpServers"]["ccx"]
-        existing["mcpServers"] = servers
-        mcp_path.write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
-        click.echo("  Merged ccx into existing .mcp.json")
-    else:
-        mcp_path.write_text(json.dumps(MCP_CONFIG, indent=2, ensure_ascii=False), encoding="utf-8")
-        click.echo("  Created .mcp.json")
 
 
 def _create_base_context_starter(project: Path, force: bool = False):
