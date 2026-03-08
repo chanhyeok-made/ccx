@@ -22,7 +22,8 @@ from ccx.analysis_cache import (
     mark_stale_cascade as _mark_stale,
     get_pending_scopes as _get_pending,
     get_pending_summary as _get_pending_summary,
-    get_unresolved_ambiguities as _get_unresolved,
+    get_annotations as _get_annotations,
+    add_annotation as _add_annotation,
     resolve_ambiguity as _resolve_ambiguity,
 )
 
@@ -199,7 +200,7 @@ def save_analysis_cache(
     children: list[str] | None = None,
     parent: str | None = None,
     scope_tree: dict[str, list[str]] | None = None,
-    ambiguities: list[dict] | None = None,
+    annotations: list[dict] | None = None,
 ) -> dict:
     """Save analysis results for a scope to cache for future reuse.
 
@@ -218,7 +219,7 @@ def save_analysis_cache(
         children: List of child scope keys in the scope hierarchy.
         parent: Parent scope key in the scope hierarchy.
         scope_tree: Full scope tree mapping to store in cache metadata.
-        ambiguities: List of ambiguities found during analysis. Each: {question, context, answer}.
+        annotations: Typed annotations. Each: {type, content, added_by, added_at, question?, answer?}.
 
     Returns:
         Dict with status and scope.
@@ -238,7 +239,7 @@ def save_analysis_cache(
         children=children,
         parent=parent,
         scope_tree=scope_tree,
-        ambiguities=ambiguities,
+        annotations=annotations,
     )
 
 
@@ -335,24 +336,62 @@ def get_pending_summary(project_dir: str, group_depth: int = 1) -> dict:
 
 @mcp.tool()
 @_with_logging
-def get_unresolved_ambiguities(
-    project_dir: str, offset: int = 0, limit: int = 20
+def get_annotations(
+    project_dir: str,
+    scope: str = "",
+    annotation_type: str = "all",
+    unresolved_only: bool = False,
+    offset: int = 0,
+    limit: int = 20,
 ) -> dict:
-    """Get unresolved ambiguities across all cached scopes, paginated.
+    """Get annotations across scopes with optional filters.
 
-    Ambiguities are questions the AI couldn't answer from code alone during indexing.
-    Users can resolve them to improve future analysis quality.
+    Annotation types: "domain" (business context), "architecture" (design rationale),
+    "usage" (how-to, gotchas), "ambiguity" (AI questions needing user answers).
 
     Args:
         project_dir: Project root directory path.
-        offset: Skip this many items (for pagination).
+        scope: Filter to a specific scope (empty = all scopes).
+        annotation_type: Filter by type — "domain", "architecture", "usage", "ambiguity", or "all".
+        unresolved_only: If True, only return ambiguity annotations without answers.
+        offset: Pagination offset.
         limit: Max items per page (default 20).
 
     Returns:
-        Dict with total_unresolved, offset, limit, has_more, items list.
-        Each item: {scope, question, context}.
+        Dict with total, offset, limit, has_more, items list.
     """
-    return _get_unresolved(project_dir, offset, limit)
+    return _get_annotations(project_dir, scope, annotation_type, unresolved_only, offset, limit)
+
+
+@mcp.tool()
+@_with_logging
+def add_annotation(
+    project_dir: str,
+    scope: str,
+    annotation_type: str,
+    content: str,
+    added_by: str = "user",
+    question: str = "",
+    answer: str = "",
+) -> dict:
+    """Add an annotation to a scope's cached analysis.
+
+    Use to enrich cached analysis with domain knowledge, architecture rationale,
+    usage guides, or ambiguity questions.
+
+    Args:
+        project_dir: Project root directory path.
+        scope: Scope key to annotate.
+        annotation_type: One of "domain", "architecture", "usage", "ambiguity".
+        content: Main content of the annotation.
+        added_by: Who added — "ai" or "user".
+        question: Question text (for ambiguity type only).
+        answer: Answer text (for ambiguity type; empty = unresolved).
+
+    Returns:
+        Dict with status (added/not_found), scope.
+    """
+    return _add_annotation(project_dir, scope, annotation_type, content, added_by, question, answer)
 
 
 @mcp.tool()
@@ -360,9 +399,9 @@ def get_unresolved_ambiguities(
 def resolve_ambiguity(
     project_dir: str, scope: str, question: str, answer: str
 ) -> dict:
-    """Resolve an ambiguity by saving the user's answer.
+    """Resolve an ambiguity-type annotation by saving the user's answer.
 
-    Matches by exact question text within the scope's ambiguities.
+    Matches by exact question text within the scope's annotations.
 
     Args:
         project_dir: Project root directory path.

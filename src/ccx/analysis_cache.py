@@ -53,7 +53,7 @@ class CacheEntry:
     file_hashes: dict[str, str] = field(default_factory=dict)  # {relative_path: git_blob_hash}
     children: list[str] = field(default_factory=list)  # child scope keys
     parent: str | None = None  # parent scope key
-    ambiguities: list[dict] = field(default_factory=list)  # [{question, context, answer}]
+    annotations: list[dict] = field(default_factory=list)  # [{type, content, question?, answer?, added_by, added_at}]
 
 
 # ---------------------------------------------------------------------------
@@ -460,7 +460,7 @@ def save_analysis_cache(
     children: list[str] | None = None,
     parent: str | None = None,
     scope_tree: dict[str, list[str]] | None = None,
-    ambiguities: list[dict] | None = None,
+    annotations: list[dict] | None = None,
 ) -> dict:
     """Save or update analysis cache for a scope.
 
@@ -483,7 +483,7 @@ def save_analysis_cache(
         file_hashes=file_hashes or {},
         children=children or [],
         parent=parent,
-        ambiguities=ambiguities or [],
+        annotations=annotations or [],
     )
 
     _save_scope(project_dir, scope, asdict(entry))
@@ -655,34 +655,56 @@ def get_pending_summary(project_dir: str, group_depth: int = 1) -> dict:
     }
 
 
-def get_unresolved_ambiguities(
-    project_dir: str, offset: int = 0, limit: int = 20
+def get_annotations(
+    project_dir: str,
+    scope: str = "",
+    annotation_type: str = "all",
+    unresolved_only: bool = False,
+    offset: int = 0,
+    limit: int = 20,
 ) -> dict:
-    """Get unresolved ambiguities across all scopes, paginated.
+    """Get annotations across scopes, with optional filters.
+
+    Args:
+        project_dir: Project root directory path.
+        scope: Filter to a specific scope (empty = all scopes).
+        annotation_type: Filter by type — "domain", "architecture", "usage",
+                         "ambiguity", or "all".
+        unresolved_only: If True, only return ambiguity-type annotations without answers.
+        offset: Pagination offset.
+        limit: Max items per page.
 
     Returns:
-        {total_unresolved, offset, limit, has_more,
-         items: [{scope, question, context}]}
+        {total, offset, limit, has_more,
+         items: [{scope, type, content, question?, answer?, added_by, added_at}]}
     """
     _ensure_cache(project_dir)
-    all_entries = _list_all_scopes(project_dir)
+
+    if scope:
+        scope = normalize_scope(scope)
+        entry = _load_scope(project_dir, scope)
+        entries = [entry] if entry else []
+    else:
+        entries = _list_all_scopes(project_dir)
 
     items: list[dict] = []
-    for entry in all_entries:
-        for amb in entry.get("ambiguities", []):
-            if not amb.get("answer"):
-                items.append({
-                    "scope": entry.get("scope", ""),
-                    "question": amb.get("question", ""),
-                    "context": amb.get("context", ""),
-                })
+    for entry in entries:
+        entry_scope = entry.get("scope", "")
+        for ann in entry.get("annotations", []):
+            atype = ann.get("type", "")
+            if annotation_type != "all" and atype != annotation_type:
+                continue
+            if unresolved_only and (atype != "ambiguity" or ann.get("answer")):
+                continue
+            item = {"scope": entry_scope, **ann}
+            items.append(item)
 
-    items.sort(key=lambda x: x["scope"])
+    items.sort(key=lambda x: (x["scope"], x.get("type", "")))
     total = len(items)
     page = items[offset : offset + limit]
 
     return {
-        "total_unresolved": total,
+        "total": total,
         "offset": offset,
         "limit": limit,
         "has_more": offset + limit < total,
@@ -690,12 +712,57 @@ def get_unresolved_ambiguities(
     }
 
 
+def add_annotation(
+    project_dir: str,
+    scope: str,
+    annotation_type: str,
+    content: str,
+    added_by: str = "user",
+    question: str = "",
+    answer: str = "",
+) -> dict:
+    """Add an annotation to a scope.
+
+    Args:
+        project_dir: Project root directory path.
+        scope: Scope key to annotate.
+        annotation_type: One of "domain", "architecture", "usage", "ambiguity".
+        content: Main content of the annotation.
+        added_by: Who added this — "ai" or "user".
+        question: Question text (for ambiguity type).
+        answer: Answer text (for ambiguity type; empty = unresolved).
+
+    Returns:
+        {status: "added"/"not_found", scope}
+    """
+    scope = normalize_scope(scope)
+    _ensure_cache(project_dir)
+    entry = _load_scope(project_dir, scope)
+
+    if entry is None:
+        return {"status": "not_found", "scope": scope}
+
+    ann: dict = {
+        "type": annotation_type,
+        "content": content,
+        "added_by": added_by,
+        "added_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if annotation_type == "ambiguity":
+        ann["question"] = question or content
+        ann["answer"] = answer
+
+    entry.setdefault("annotations", []).append(ann)
+    _save_scope(project_dir, scope, entry)
+    return {"status": "added", "scope": scope}
+
+
 def resolve_ambiguity(
     project_dir: str, scope: str, question: str, answer: str
 ) -> dict:
-    """Resolve an ambiguity by saving the user's answer.
+    """Resolve an ambiguity-type annotation by saving the user's answer.
 
-    Matches by question text within the scope's ambiguities list.
+    Matches by question text within the scope's annotations.
 
     Returns:
         {status: "resolved"/"not_found", scope, question}
@@ -708,9 +775,9 @@ def resolve_ambiguity(
         return {"status": "not_found", "scope": scope, "question": question}
 
     matched = False
-    for amb in entry.get("ambiguities", []):
-        if amb.get("question") == question:
-            amb["answer"] = answer
+    for ann in entry.get("annotations", []):
+        if ann.get("type") == "ambiguity" and ann.get("question") == question:
+            ann["answer"] = answer
             matched = True
             break
 
