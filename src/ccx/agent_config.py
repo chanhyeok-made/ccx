@@ -8,7 +8,6 @@ import yaml
 from pathlib import Path
 
 VALID_AGENTS = [
-    "analyzer",
     "planner",
     "researcher",
     "implementer",

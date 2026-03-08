@@ -117,6 +117,6 @@ All scopes are now cached and available for future analysis.
 
 ## Pipeline Integration
 
-When called from `/ccx:run` (Phase 0), this skill receives no `$ARGUMENTS`. It runs in incremental mode and returns its summary to the orchestrator. The orchestrator can then proceed to Phase 1 (Analyze) with a fully warmed cache.
+When called from `/ccx:run` (Phase 0), this skill receives no `$ARGUMENTS`. It runs in incremental mode and returns its summary to the orchestrator. The orchestrator can then proceed to Phase 1 (Adaptive Plan) with a fully warmed cache.
 
 Arguments: $ARGUMENTS

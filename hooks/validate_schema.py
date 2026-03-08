@@ -16,11 +16,11 @@ from datetime import datetime, timezone
 
 # Per-agent required output markers (case-insensitive search)
 AGENT_SCHEMAS = {
-    "ccx:analyzer": {
-        "required_markers": ["Intent:", "Scope:", "Constraints:"],
-    },
     "ccx:planner": {
-        "required_markers": ["| #", "Execution order:"],
+        "required_markers": [
+            "Intent:", "Scope:", "Constraints:",
+            "Complexity:", "| #", "Execution order:",
+        ],
     },
     "ccx:researcher": {
         "required_markers": ["Files:", "Dependencies:", "Impact zone:"],

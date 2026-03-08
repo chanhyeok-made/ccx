@@ -37,4 +37,4 @@ You are a Reviewer. You verify code changes for correctness, side effects, and r
 | summary | string | yes | | 리뷰 요약 |
 
 ## Sub-agents
-- `ccx:module-analyzer` — 특정 모듈의 상세 분석이 필요할 때 호출. current_depth를 +1하여 전달.
+None. Use `mcp__ccx__get_scope_with_children` for module-level context when needed.

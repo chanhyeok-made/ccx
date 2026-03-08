@@ -1,6 +1,6 @@
 ---
 name: run
-description: "Full development pipeline: analyze -> plan -> implement -> review -> commit"
+description: "Full development pipeline: plan -> implement -> review -> commit"
 disable-model-invocation: true
 argument-hint: "[request description]"
 allowed-tools: Read, Bash, Agent, Skill, TaskCreate, TaskUpdate, TaskList, TaskGet, AskUserQuestion, mcp__ccx__record_execution, mcp__ccx__invalidate_analysis_cache, mcp__ccx__trigger_index, mcp__ccx__mark_stale_cascade, mcp__ccx__list_cached_scopes, mcp__ccx__get_scope_with_children, mcp__ccx__get_agent_config
@@ -8,7 +8,7 @@ allowed-tools: Read, Bash, Agent, Skill, TaskCreate, TaskUpdate, TaskList, TaskG
 
 # Full Development Pipeline
 
-You are a **pure orchestrator**. Execute phases 0→5 in strict order. You do NOT read source files, load project context, or implement code — subagents do all work.
+You are a **pure orchestrator**. Execute phases 0→4 in strict order. You do NOT read source files, load project context, or implement code — subagents do all work.
 
 Your FIRST tool call MUST be `mcp__ccx__trigger_index`. Do NOT skip ahead.
 
@@ -18,58 +18,55 @@ Your FIRST tool call MUST be `mcp__ccx__trigger_index`. Do NOT skip ahead.
 2. `new_scopes` non-empty → invoke `/ccx:index` via `Skill` tool. No checkpoint.
 3. All fresh → output `Index: all scopes up to date.`
 
-## Phase 1: Analyze
-
-Launch `ccx:analyzer` Agent:
-> project_dir="{project_dir}", request="{user_request}", current_depth=1
-
-Handle per handling loop. Show result.
-
-CHECKPOINT("분석 결과가 맞나요?", "분석 확인", ["Proceed", "Modify", "Cancel"])
-
-## Phase 2: Plan
+## Phase 1: Adaptive Plan
 
 Launch `ccx:planner` Agent:
-> project_dir="{project_dir}", intent="{intent}", scope="{scope}", constraints="{constraints}", current_depth=1
+> project_dir="{project_dir}", request="{user_request}", current_depth=1
 
-Handle per handling loop. Show plan. Create tasks via `TaskCreate`.
+Handle per handling loop. Show result (intent, scope, constraints, complexity, task table). Create tasks via `TaskCreate`.
 
-CHECKPOINT("이 계획대로 진행할까요?", "계획 확인", ["Proceed", "Modify", "Cancel"])
+CHECKPOINT("분석 및 계획이 맞나요?", "계획 확인", ["Proceed", "Modify", "Cancel"])
 
-## Phase 3: Execute
+## Phase 2: Execute
 
-**Agent Config Injection** — Before launching each subagent (researcher, implementer, reviewer), call `mcp__ccx__get_agent_config(project_dir, agent_name)` where `agent_name` matches the subagent type (e.g. `"researcher"`, `"implementer"`, `"reviewer"`). If the config exists (non-null response), append an `## Agent Config` block to the subagent prompt:
-
-```
-## Agent Config
-rules: {rules from get_agent_config}
-context: {context from get_agent_config}
-disabled_rules: {disabled_rules from get_agent_config}
-```
+**Agent Config Injection** — Before launching each subagent, call `mcp__ccx__get_agent_config(project_dir, agent_name)`. If config exists, append `## Agent Config` block with rules/context/disabled_rules to the prompt.
 
 For each task in dependency order, output `### Executing T{N}: {description}`:
 
-**3a. Research** — Launch `ccx:researcher` Agent:
+### Subagent launch prompts
+
+**2a. Research** — Launch `ccx:researcher` Agent:
 > project_dir="{project_dir}", current_depth=1, task_description="{task}"
 
-**3b. Implement** — Launch `ccx:implementer` Agent:
-> project_dir="{project_dir}", current_depth=1, task_description="{task}", files="{from 3a}", impact_zone="{from 3a}"
+**2b. Implement** — Launch `ccx:implementer` Agent:
+> project_dir="{project_dir}", current_depth=1, task_description="{task}", files="{from 2a}", impact_zone="{from 2a}"
 
-**3c. Review** — Launch `ccx:reviewer` Agent:
-> project_dir="{project_dir}", current_depth=1, task_description="{task}", changed_files="{from 3b}", impact_zone="{from 3a}"
+**2c. Review** — Launch `ccx:reviewer` Agent:
+> project_dir="{project_dir}", current_depth=1, task_description="{task}", changed_files="{from 2b}", impact_zone="{from 2a}"
 
-On reject → re-implement → re-review (max 3). After approval, `mcp__ccx__mark_stale_cascade` for affected scopes. Mark task done via `TaskUpdate`.
+### Adaptive execution by complexity
 
+**simple** — 2a → 2b only. Skip reviewer (2c), skip per-task checkpoint.
+
+**medium** — 2a → 2b → 2c (standard pipeline).
+
+**complex** — 2a → 2b → 2c per task. After ALL tasks, launch `ccx:reviewer` once more with all changed_files for cross-task consistency.
+
+**On reject** → `git checkout -- {changed_files}` → re-implement → re-review (max 3).
+
+After approval, `mcp__ccx__mark_stale_cascade` for affected scopes. Mark task done via `TaskUpdate`.
+
+Per-task CHECKPOINT (medium/complex only):
 CHECKPOINT("T{N} 결과를 확인해주세요.\n\n{changed_files_summary}", "코드 확인", ["Approve", "Request changes", "Reject & redo"])
 
-## Phase 4: Commit
+## Phase 3: Commit
 
 1. `git diff --stat`
 2. Draft conventional commit message.
 
 CHECKPOINT("커밋할까요?\n\n{commit_message}", "커밋 확인", ["Commit & Push", "Edit message", "Skip commit"])
 
-## Phase 5: Record
+## Phase 4: Record
 
 Call `mcp__ccx__record_execution(project_dir, request, success, summary, changes)`.
 Output: `Pipeline complete. {summary}`

@@ -101,7 +101,7 @@ Skills are invoked inside Claude Code with the `/ccx:` prefix.
 
 | Skill                           | Description                                                                    |
 |---------------------------------|--------------------------------------------------------------------------------|
-| `/ccx:run [request]`           | Full pipeline: analyze, plan, implement, review, commit with checkpoints.      |
+| `/ccx:run [request]`           | Full pipeline: adaptive plan, implement, review, commit with checkpoints.      |
 | `/ccx:analyze [request]`       | Standalone analysis: produce structured requirements from a request.            |
 | `/ccx:review [files or scope]` | Review code changes against project exception rules.                           |
 | `/ccx:commit [context]`        | Generate and create a conventional commit for current changes.                 |
@@ -167,8 +167,8 @@ Orchestrator (depth 0)
 
 | Parent agent | Sub-agent | Purpose |
 |---|---|---|
+| Planner | Researcher | Deep codebase exploration when cached scope analysis is insufficient. |
 | Implementer | Researcher | Gather context about unfamiliar modules before making changes. |
-| Reviewer | Module-analyzer | Deep-dive into a specific module's design when reviewing changes. |
 
 Sub-agents follow the same protocol as top-level agents: they receive context via MCP tools, return structured `STATUS: COMPLETE` or `STATUS: NEEDS_CONTEXT` results, and never interact with the user directly.
 
@@ -230,7 +230,7 @@ Key design decisions:
 - **Main agent = pure orchestrator.** It coordinates phases and handles user interaction but does not read files or load project context itself.
 - **All heavy work is delegated to subagents.** Each subagent loads context via MCP tools directly.
 - **User interaction happens only through the main agent.** Subagents return structured status (COMPLETE / NEEDS_CONTEXT) and never prompt the user.
-- **Pipeline phases:** Index (optional) -> Analyze -> Plan -> Execute (Research, Implement, Review) -> Commit & Push -> Record. Mandatory checkpoints after Analyze, Plan, and Execute.
+- **Pipeline phases:** Index (optional) -> Adaptive Plan -> Execute (Research, Implement, Review) -> Commit & Push -> Record. Adaptive pipeline depth: simple requests skip reviewer, complex requests add final synthesis review.
 
 ## Directory Structure
 
@@ -262,11 +262,10 @@ hooks/
 
 agents/
     _protocol.md            -- Shared agent protocol (rules, output format)
-    analyzer.md             -- Analyzer agent definition
     implementer.md          -- Implementer agent definition
     module-analyzer.md      -- Module-level analysis agent (indexing)
     package-synthesizer.md  -- Package-level synthesis agent (indexing)
-    planner.md              -- Planner agent definition
+    planner.md              -- Adaptive Planner (analysis + planning)
     researcher.md           -- Researcher agent definition
     reviewer.md             -- Reviewer agent definition
 
