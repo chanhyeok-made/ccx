@@ -116,7 +116,8 @@ def _extract_version(marker: Path, runtime: str) -> str:
 
         if runtime == "python" and marker.name == "pyproject.toml":
             for line in text.splitlines():
-                if "python" in line and ("=" in line or ">" in line):
+                stripped = line.strip()
+                if stripped.startswith("python") and not stripped.startswith("python-") and ("=" in stripped):
                     # e.g. python = "^3.11"
                     parts = line.split('"')
                     if len(parts) >= 2:

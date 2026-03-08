@@ -16,8 +16,10 @@ You receive these from your launch prompt:
 
 ## Instructions
 
-1. Call `mcp__ccx__check_rules(project_dir)` to verify against project rules.
-2. Verify:
+1. Read the diff of each file in `changed_files` to understand what was changed.
+2. Compose a `changes_description` summarizing the task and concrete modifications (based on `task_description` and the diffs).
+3. Call `mcp__ccx__check_rules(changes_description, project_dir)` to verify against project rules.
+4. Verify:
    - **Correctness**: Does the change achieve its intent?
    - **Side effects**: Does it break related files?
    - **Rules**: Does it respect project rules?

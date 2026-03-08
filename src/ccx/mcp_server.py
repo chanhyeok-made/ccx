@@ -204,11 +204,14 @@ def invalidate_analysis_cache(project_dir: str, scope: str) -> dict:
 
 
 @mcp.tool()
-def list_cached_scopes(project_dir: str) -> list[dict]:
+def list_cached_scopes(project_dir: str) -> dict:
     """List all cached analysis scopes with brief info.
 
     Args:
         project_dir: Project root directory path.
+
+    Returns:
+        Dict with scopes list and count.
     """
     return _list_scopes(project_dir)
 

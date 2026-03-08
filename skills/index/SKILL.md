@@ -23,7 +23,7 @@ Call `mcp__ccx__trigger_index(project_dir)` to discover all modules/packages and
 The result contains:
 - `scope_tree`: `{parent_key: [child_keys]}` — hierarchical structure
 - `new_scopes`: scopes discovered but not yet in cache
-- `stale_scopes`: scopes in cache but NO LONGER in project (orphaned — ignore these)
+- `stale_scopes`: scopes in cache but NO LONGER in project (orphaned — automatically cleaned up during indexing)
 - `total_scopes`, `packages`, `modules`: counts
 - Each scope entry has: `key`, `path`, `type` ("module"/"package"), `files`, `parent`, `language`
 

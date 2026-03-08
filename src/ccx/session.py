@@ -35,7 +35,10 @@ def load_session(project_dir: str, limit: int = 10) -> list[dict]:
     if not path.exists():
         return []
 
-    data = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
     records = data.get("records", [])
     return records[-limit:] if limit else records
 

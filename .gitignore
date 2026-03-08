@@ -9,3 +9,4 @@ dist/
 base-context.yaml
 .claude/skills/
 !.claude/settings.local.json
+claude-plugins/

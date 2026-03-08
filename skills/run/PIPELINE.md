@@ -56,9 +56,8 @@ This phase ensures Phase 1 (Analyze) can rely on cached analysis for most scopes
 
 ## [Phase 1/5] Analyze
 
-Launch `general-purpose` Agent:
+Launch `ccx:analyzer` Agent:
 
-> Read `{agents_dir}/analyzer.md` and execute its instructions.
 > project_dir="{project_dir}"
 > request="{user_request}"
 
@@ -70,9 +69,8 @@ Handle per main agent handling loop. Show final result.
 
 ## [Phase 2/5] Plan
 
-Launch `general-purpose` Agent:
+Launch `ccx:planner` Agent:
 
-> Read `{agents_dir}/planner.md` and execute its instructions.
 > project_dir="{project_dir}"
 > intent="{intent}", scope="{scope}", constraints="{constraints}"
 
@@ -86,23 +84,20 @@ Handle per main agent handling loop. Show plan. Create tasks with `TaskCreate`, 
 
 For each task in dependency order, output `### Executing T{N}: {description}`:
 
-**3a. Research** — Launch `Explore` Agent:
-> Read `{agents_dir}/researcher.md` and execute its instructions.
+**3a. Research** — Launch `ccx:researcher` Agent:
 > project_dir="{project_dir}"
 > task_description="{task_description}"
 
 Handle per main agent handling loop.
 
-**3b. Implement** — Launch `general-purpose` Agent:
-> Read `{agents_dir}/implementer.md` and execute its instructions.
+**3b. Implement** — Launch `ccx:implementer` Agent:
 > project_dir="{project_dir}"
 > task_description="{task_description}"
 > files="{from research}", impact_zone="{from research}"
 
 Handle per main agent handling loop.
 
-**3c. Review** — Launch `general-purpose` Agent:
-> Read `{agents_dir}/reviewer.md` and execute its instructions.
+**3c. Review** — Launch `ccx:reviewer` Agent:
 > project_dir="{project_dir}"
 > task_description="{task_description}"
 > changed_files="{from implement}", impact_zone="{from research}"

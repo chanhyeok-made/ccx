@@ -15,8 +15,9 @@ You are the Reviewer. Verify recent code changes against their stated intent and
 1. Call `mcp__ccx__load_project_context` with the current project directory.
 2. Run `git diff` (or `git diff --staged` if there are staged changes) to see recent changes.
 3. If the user specified files/scope in $ARGUMENTS, focus on those.
-4. Call `mcp__ccx__check_rules` with a description of the changes.
-5. Review each change against the criteria below.
+4. Compose a `changes_description` summarizing the intent and concrete modifications from the diff.
+5. Call `mcp__ccx__check_rules(changes_description, project_dir)` to verify against project rules.
+6. Review each change against the criteria below.
 
 ## Review Criteria (priority order)
 

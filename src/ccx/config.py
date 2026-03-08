@@ -45,7 +45,7 @@ def load_base_context(project_dir: str, path: str | None = None) -> dict:
 
 
 def _load_yaml(path: Path) -> dict:
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
 
     # Merge with defaults for missing fields

@@ -157,7 +157,7 @@ def index(project_dir: str, reset: bool, verbose: bool):
     if new_count:
         click.echo(f"\n  New scopes:   {new_count}")
     if stale_count:
-        click.echo(f"  Stale scopes: {stale_count}")
+        click.echo(f"  Orphan scopes cleaned: {stale_count}")
 
     if verbose:
         from ccx.analysis_cache import _load_meta

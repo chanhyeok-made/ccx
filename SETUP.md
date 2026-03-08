@@ -2,7 +2,7 @@
 
 ## What is ccx
 
-ccx (Claude Code eXtension) is a Claude Code plugin that provides a project-aware development pipeline through Skills and an MCP Server. It is distributed as a Claude Code plugin (`.claude-plugin/`), which bundles skills, hooks, and MCP server configuration into a single installable unit. Claude Code acts as the orchestrator; ccx supplies the skills (pipeline logic) and MCP tools (project context, session, analysis cache) that subagents consume.
+ccx (Claude Code eXtension) is a Claude Code plugin that provides a project-aware development pipeline through Skills and an MCP Server. Skills, hooks, and MCP configuration live at the repository root and are discovered automatically by Claude Code's convention-based plugin system. Claude Code acts as the orchestrator; ccx supplies the skills (pipeline logic) and MCP tools (project context, session, analysis cache) that subagents consume.
 
 ## Prerequisites
 
@@ -131,15 +131,29 @@ The ccx MCP server (`ccx.mcp_server`) exposes the following tools:
 | `add_annotation`             | Add domain/architecture/usage/ambiguity annotation to a scope.                    |
 | `resolve_ambiguity`          | Resolve an ambiguity annotation with an answer.                                   |
 
+### MCP Tool Namespace Mapping
+
+Skill and agent files in this repository reference MCP tools using the **canonical** short prefix `mcp__ccx__` (e.g. `mcp__ccx__load_project_context`). The actual prefix that appears at runtime depends on how ccx is loaded:
+
+| Loading method | Runtime prefix | Example |
+|---|---|---|
+| **Local `.mcp.json`** (`claude --plugin-dir ~/ccx`) | `mcp__ccx__*` | `mcp__ccx__load_project_context` |
+| **Plugin install** (`claude plugin install ccx@...`) | `mcp__plugin_ccx_ccx__*` | `mcp__plugin_ccx_ccx__load_project_context` |
+
+The longer plugin prefix follows the Claude Code convention `mcp__plugin_{plugin}_{server}__`, where both `{plugin}` and `{server}` happen to be `ccx`.
+
+**You do not need to change skill or agent files.** Claude Code resolves the canonical `mcp__ccx__` references to the correct runtime prefix automatically, so all skill and agent Markdown files keep the short form.
+
 ## Architecture
 
 ```
 Claude Code (orchestrator)
     |
-    |-- Plugin (.claude-plugin/)
-    |       |-- Skills              -- pipeline logic, subagent prompts
-    |       |-- Hooks               -- event logging
-    |       +-- MCP config          -- server connection settings
+    |-- Plugin (convention-based discovery at repo root)
+    |       |-- skills/             -- pipeline logic, subagent prompts
+    |       |-- hooks/              -- event logging
+    |       |-- agents/             -- subagent definitions
+    |       +-- .mcp.json           -- MCP server connection settings
     |
     |-- MCP Server (ccx.mcp_server) -- project context, session, analysis cache
     |
@@ -149,7 +163,7 @@ Claude Code (orchestrator)
 ```
 
 Key design decisions:
-- **Plugin-based distribution.** Skills, hooks, and MCP configuration are bundled in `.claude-plugin/` and installed via `claude plugin install`. No manual copying of files into `.claude/` is needed.
+- **Plugin-based distribution.** Skills (`skills/`), hooks (`hooks/`), agents (`agents/`), and MCP configuration (`.mcp.json`) live at the repository root and are auto-discovered by Claude Code's convention-based plugin system. `.claude-plugin/plugin.json` provides the minimal plugin manifest. No manual copying of files into `.claude/` is needed.
 - **Main agent = pure orchestrator.** It coordinates phases and handles user interaction but does not read files or load project context itself.
 - **All heavy work is delegated to subagents.** Each subagent loads context via MCP tools directly.
 - **User interaction happens only through the main agent.** Subagents return structured status (COMPLETE / NEEDS_CONTEXT) and never prompt the user.
@@ -159,26 +173,39 @@ Key design decisions:
 
 ```
 .claude-plugin/
-    plugin.json             -- Plugin manifest (skills, hooks, MCP config)
-    mcp.json                -- MCP server connection configuration
-    skills/
-        run/
-            SKILL.md        -- /ccx:run entry point
-            PIPELINE.md     -- Detailed pipeline logic
-        analyze/
-            SKILL.md        -- /ccx:analyze
-        review/
-            SKILL.md        -- /ccx:review
-        commit/
-            SKILL.md        -- /ccx:commit
-        index/
-            SKILL.md        -- /ccx:index
-        resolve/
-            SKILL.md        -- /ccx:resolve
-    hooks/
-        hooks.json          -- Hook configuration (event matchers)
-        log_event.sh        -- Hook script for event logging
-        log_event.py        -- Python handler for event logging
+    plugin.json             -- Plugin manifest (name, description, author)
+
+.mcp.json                   -- MCP server connection configuration
+
+skills/
+    run/
+        SKILL.md            -- /ccx:run entry point
+        PIPELINE.md         -- Detailed pipeline logic
+    analyze/
+        SKILL.md            -- /ccx:analyze
+    review/
+        SKILL.md            -- /ccx:review
+    commit/
+        SKILL.md            -- /ccx:commit
+    index/
+        SKILL.md            -- /ccx:index
+    resolve/
+        SKILL.md            -- /ccx:resolve
+
+hooks/
+    hooks.json              -- Hook configuration (event matchers)
+    log_event.sh            -- Hook script for event logging
+    log_event.py            -- Python handler for event logging
+
+agents/
+    _protocol.md            -- Shared agent protocol (rules, output format)
+    analyzer.md             -- Analyzer agent definition
+    implementer.md          -- Implementer agent definition
+    module-analyzer.md      -- Module-level analysis agent (indexing)
+    package-synthesizer.md  -- Package-level synthesis agent (indexing)
+    planner.md              -- Planner agent definition
+    researcher.md           -- Researcher agent definition
+    reviewer.md             -- Reviewer agent definition
 
 src/ccx/
     __init__.py

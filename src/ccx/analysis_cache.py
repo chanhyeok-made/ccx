@@ -283,49 +283,39 @@ def _ensure_cache(project_dir: str) -> None:
 # Staleness detection (unchanged from original)
 # ---------------------------------------------------------------------------
 
-def _check_staleness(project_dir: str, entry: dict) -> tuple[bool, str]:
+def _check_staleness(
+    project_dir: str,
+    entry: dict,
+    git_index: dict[str, str] | None = None,
+) -> tuple[bool, str]:
     """Check if cached entry is stale by detecting file changes.
 
     Primary: compare file_hashes (git blob hashes) against current git index.
     Fallback: git log --since + mtime comparison for entries without file_hashes.
+
+    Args:
+        project_dir: Project root directory path.
+        entry: Cached scope entry dict.
+        git_index: Pre-loaded {path: blob_hash} from git ls-files -s.
+                   If None, loads it via _load_git_index().
     """
     file_hashes = entry.get("file_hashes", {})
 
     # Primary: file_hashes-based staleness check
     if file_hashes:
-        try:
-            result = subprocess.run(
-                ["git", "ls-files", "-s"],
-                capture_output=True,
-                text=True,
-                cwd=project_dir,
-                timeout=5,
-            )
-            if result.returncode == 0:
-                # Parse git ls-files -s output: "100644 {blob_hash} 0\t{path}"
-                index: dict[str, str] = {}
-                for line in result.stdout.strip().split("\n"):
-                    if not line:
-                        continue
-                    parts = line.split("\t", 1)
-                    if len(parts) == 2:
-                        blob_hash = parts[0].split()[1]
-                        path = parts[1]
-                        index[path] = blob_hash
+        index = git_index if git_index is not None else _load_git_index(project_dir)
+        if index is not None:
+            changed: list[str] = []
+            for path, cached_hash in file_hashes.items():
+                current_hash = index.get(path)
+                if current_hash is None:
+                    changed.append(f"removed/untracked: {path}")
+                elif current_hash != cached_hash:
+                    changed.append(f"changed: {path}")
 
-                changed: list[str] = []
-                for path, cached_hash in file_hashes.items():
-                    current_hash = index.get(path)
-                    if current_hash is None:
-                        changed.append(f"removed/untracked: {path}")
-                    elif current_hash != cached_hash:
-                        changed.append(f"changed: {path}")
-
-                if changed:
-                    return True, f"{len(changed)} file(s) differ — {'; '.join(changed)}"
-                return False, ""
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass  # git unavailable, fall through to legacy check
+            if changed:
+                return True, f"{len(changed)} file(s) differ — {'; '.join(changed)}"
+            return False, ""
 
     # Fallback: git log --since + mtime (for entries without file_hashes or git failure)
     cached_at = entry.get("cached_at", "")
@@ -411,7 +401,7 @@ def _check_staleness_with_index(
         return False, ""
 
     # Fall back to full _check_staleness for entries without file_hashes or when index unavailable
-    return _check_staleness(project_dir, entry)
+    return _check_staleness(project_dir, entry, git_index=git_index)
 
 
 # ---------------------------------------------------------------------------
@@ -526,22 +516,22 @@ def invalidate_cache(project_dir: str, scope: str) -> dict:
     return {"status": "not_found", "scope": scope}
 
 
-def list_cached_scopes(project_dir: str) -> list[dict]:
+def list_cached_scopes(project_dir: str) -> dict:
     """List all cached scopes with brief info.
 
-    Returns: list of {scope, summary, cached_at, key_files_count}
+    Returns: dict with scopes list and count.
     """
     _ensure_cache(project_dir)
     all_entries = _list_all_scopes(project_dir)
-    result = []
+    scopes = []
     for entry in all_entries:
-        result.append({
+        scopes.append({
             "scope": entry.get("scope", ""),
             "summary": entry.get("summary", ""),
             "cached_at": entry.get("cached_at", ""),
             "key_files_count": len(entry.get("key_files", [])),
         })
-    return result
+    return {"scopes": scopes, "count": len(scopes)}
 
 
 def _collect_pending(project_dir: str) -> list[dict]:
@@ -820,9 +810,14 @@ def build_scope_tree(project_dir: str) -> dict:
     all_existing = _list_all_scopes(project_dir)
     existing_keys = {e.get("scope", "") for e in all_existing}
 
-    # Identify new and stale scopes
+    # Identify new and stale (orphan) scopes
     new_scopes = sorted(discovered_keys - existing_keys)
     stale_scopes = sorted(existing_keys - discovered_keys)
+
+    # Auto-clean orphan scopes (cached but no longer in project)
+    for orphan_key in stale_scopes:
+        if orphan_key:
+            _delete_scope(project_dir, orphan_key)
 
     # Count types
     packages = sum(1 for s in scopes if s["type"] == "package")
