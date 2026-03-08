@@ -10,12 +10,12 @@
       "source": "./",
       "strict": false,
       "skills": [
-        "./.claude-plugin/skills/run",
-        "./.claude-plugin/skills/analyze",
-        "./.claude-plugin/skills/review",
-        "./.claude-plugin/skills/commit",
-        "./.claude-plugin/skills/index",
-        "./.claude-plugin/skills/resolve"
+        "./skills/run",
+        "./skills/analyze",
+        "./skills/review",
+        "./skills/commit",
+        "./skills/index",
+        "./skills/resolve"
       ]
     }
   ]

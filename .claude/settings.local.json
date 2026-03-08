@@ -23,7 +23,10 @@
       "mcp__ccx__save_analysis_cache",
       "Bash(.venv/bin/pip install:*)",
       "mcp__ccx__mark_stale_cascade",
-      "Bash(PYTHONPATH=src .venv/bin/python:*)"
+      "Bash(PYTHONPATH=src .venv/bin/python:*)",
+      "mcp__ide__getDiagnostics",
+      "Bash(claude plugin:*)",
+      "Bash(gh api:*)"
     ]
   }
 }

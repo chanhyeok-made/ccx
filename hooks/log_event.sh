@@ -7,7 +7,7 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # If CLAUDE_PLUGIN_ROOT is set, prefer it for reliable path resolution
 if [ -n "$CLAUDE_PLUGIN_ROOT" ]; then
-    HANDLER="${CLAUDE_PLUGIN_ROOT}/.claude-plugin/hooks/log_event.py"
+    HANDLER="${CLAUDE_PLUGIN_ROOT}/hooks/log_event.py"
 else
     HANDLER="${SCRIPT_DIR}/log_event.py"
 fi

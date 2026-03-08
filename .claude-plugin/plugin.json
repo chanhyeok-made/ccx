@@ -1,51 +1,7 @@
 {
   "name": "ccx",
-  "version": "0.2.0",
   "description": "Claude Code extension for project-aware development pipeline with analysis cache, session management, and automated workflows",
-  "author": "chanhyeok-made",
-  "keywords": ["development", "pipeline", "analysis", "mcp"],
-  "skills": {
-    "index": {
-      "path": ".claude-plugin/skills/index/SKILL.md",
-      "description": "Interactive indexing pipeline with ambiguities support"
-    },
-    "run": {
-      "path": ".claude-plugin/skills/run/SKILL.md",
-      "description": "Run development pipeline",
-      "pipeline": ".claude-plugin/skills/run/PIPELINE.md"
-    },
-    "analyze": {
-      "path": ".claude-plugin/skills/analyze/SKILL.md",
-      "description": "Analyze project scopes with annotations"
-    },
-    "commit": {
-      "path": ".claude-plugin/skills/commit/SKILL.md",
-      "description": "Commit workflow with analysis-aware context"
-    },
-    "review": {
-      "path": ".claude-plugin/skills/review/SKILL.md",
-      "description": "Code review with cached analysis context"
-    },
-    "resolve": {
-      "path": ".claude-plugin/skills/resolve/SKILL.md",
-      "description": "Resolve ambiguity annotations"
-    }
-  },
-  "hooks": {
-    "config": "hooks/hooks.json",
-    "scripts": [
-      ".claude-plugin/hooks/log_event.sh",
-      ".claude-plugin/hooks/log_event.py"
-    ]
-  },
-  "mcp": {
-    "config": ".claude-plugin/mcp.json",
-    "servers": {
-      "ccx": {
-        "command": "python3",
-        "args": ["-m", "ccx.mcp_server"],
-        "description": "CCX MCP server providing analysis cache, session management, and project context tools"
-      }
-    }
+  "author": {
+    "name": "chanhyeok-made"
   }
 }
