@@ -77,9 +77,24 @@ Launch `Agent` with `subagent_type: "general-purpose"`. Prompt:
 >    - **patterns**: notable code patterns or conventions used
 >    - **known_issues**: any obvious issues (empty list if none)
 >    - **key_files**: the file paths in this scope
-> 4. Call `mcp__ccx__save_analysis_cache` with:
+>    - **annotations**: a list of typed annotations (see below)
+>
+> 4. Generate **annotations** — structured insights about this module:
+>    - `domain` (1-2): What business/technical domain this module serves, its purpose in the system.
+>    - `architecture` (1-2): Design rationale, key patterns, why it's structured this way.
+>    - `usage` (1-2): How to use this module, gotchas, common usage patterns.
+>    - `ambiguity` (0+): Questions about genuinely unclear code, naming, or design — only if something is truly ambiguous.
+>
+>    Format for domain/architecture/usage:
+>    `{type: "<type>", content: "<insight>", added_by: "ai", added_at: "<ISO 8601 timestamp>"}`
+>
+>    Format for ambiguity:
+>    `{type: "ambiguity", content: "<description>", added_by: "ai", added_at: "<ISO 8601 timestamp>", question: "<specific question>", answer: ""}`
+>
+> 5. Call `mcp__ccx__save_analysis_cache` with:
 >    - `project_dir`, `scope` = `"{scope_key}"`
 >    - All analysis fields above
+>    - `annotations` = the annotations list from step 4
 >    - `file_hashes` = `{path: blob_hash}` from step 2
 >    - `children` = `[]`, `parent` = `"{parent_key}"` (or null)
 >    - `cached_by_request` = `"ccx:index"`
@@ -108,8 +123,23 @@ Launch `Agent` with `subagent_type: "general-purpose"`. Prompt:
 >    - **patterns**: common patterns across the package
 >    - **known_issues**: aggregated issues
 >    - **key_files**: direct package files only (e.g., `__init__.py`)
-> 5. Call `mcp__ccx__save_analysis_cache` with:
+>    - **annotations**: a list of NEW package-level annotations (see below)
+>
+> 5. Generate **annotations** — package-level insights synthesized from children (do NOT just copy child annotations):
+>    - `domain` (1-2): What domain this package as a whole serves, how the children together form a cohesive unit.
+>    - `architecture` (1-2): Cross-module design rationale — why these modules are grouped, key architectural decisions at this level.
+>    - `usage` (1-2): How to use this package, which child modules are the main entry points, gotchas.
+>    - `ambiguity` (0+): Cross-module design questions — e.g., unclear responsibilities between children, inconsistent patterns.
+>
+>    Format for domain/architecture/usage:
+>    `{type: "<type>", content: "<insight>", added_by: "ai", added_at: "<ISO 8601 timestamp>"}`
+>
+>    Format for ambiguity:
+>    `{type: "ambiguity", content: "<description>", added_by: "ai", added_at: "<ISO 8601 timestamp>", question: "<specific question>", answer: ""}`
+>
+> 6. Call `mcp__ccx__save_analysis_cache` with:
 >    - All fields above
+>    - `annotations` = the annotations list from step 5
 >    - `file_hashes` = hashes of direct package files only
 >    - `children` = `[{child_keys}]`, `parent` = `"{parent_key}"` (or null)
 >    - `cached_by_request` = `"ccx:index"`
