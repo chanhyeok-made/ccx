@@ -5,7 +5,7 @@ File-based persistence for execution history across Claude Code sessions.
 
 import json
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -59,7 +59,7 @@ def save_record(
         data = {"records": []}
 
     record = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "request": request,
         "success": success,
         "summary": summary,

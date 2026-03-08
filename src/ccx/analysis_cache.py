@@ -15,7 +15,6 @@ Storage layout (v2 directory-based):
 """
 
 import json
-import shutil
 import subprocess
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
@@ -30,6 +29,7 @@ META_FILE = "_meta.json"
 CACHE_VERSION = 2
 MAX_SCOPES = 5000
 STALENESS_THRESHOLD_SECONDS = 0  # any change after cached_at -> stale
+VALID_ANNOTATION_TYPES = {"domain", "architecture", "usage", "ambiguity"}
 
 # Legacy flat-file name (for migration)
 _LEGACY_CACHE_FILE = "analysis-cache.json"
@@ -435,7 +435,8 @@ def get_analysis_cache(
     stale = False
     stale_reason = ""
     if check_staleness:
-        stale, stale_reason = _check_staleness(project_dir, entry)
+        git_index = _load_git_index(project_dir)
+        stale, stale_reason = _check_staleness_with_index(project_dir, entry, git_index)
 
     return {
         "hit": True,
@@ -494,10 +495,11 @@ def save_analysis_cache(
         meta["scope_tree"] = scope_tree
         _save_meta(project_dir, meta)
 
-    # Rolling limit: evict oldest entries beyond MAX_SCOPES
-    all_entries = _list_all_scopes(project_dir)
-    if len(all_entries) > MAX_SCOPES:
-        # Sort by cached_at ascending, evict oldest
+    # Rolling limit: lightweight count first, only load entries if eviction needed
+    scopes_root = _scopes_dir(project_dir)
+    scope_count = sum(1 for _ in scopes_root.rglob(SCOPE_FILE))
+    if scope_count > MAX_SCOPES:
+        all_entries = _list_all_scopes(project_dir)
         all_entries.sort(key=lambda e: e.get("cached_at", ""))
         to_evict = all_entries[: len(all_entries) - MAX_SCOPES]
         for old_entry in to_evict:
@@ -735,6 +737,9 @@ def add_annotation(
     Returns:
         {status: "added"/"not_found", scope}
     """
+    if annotation_type not in VALID_ANNOTATION_TYPES:
+        return {"status": "invalid_type", "scope": scope, "valid_types": sorted(VALID_ANNOTATION_TYPES)}
+
     scope = normalize_scope(scope)
     _ensure_cache(project_dir)
     entry = _load_scope(project_dir, scope)

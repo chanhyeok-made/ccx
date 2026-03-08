@@ -75,6 +75,7 @@ Skills are invoked inside Claude Code with the `/project:` prefix.
 | `/project:review [files or scope]` | Review recent code changes against project exception rules. |
 | `/project:commit [context]` | Generate and create a conventional commit for current changes. |
 | `/project:index [--force]` | Perform code-level analysis on all project scopes and cache results. Incremental by default; `--force` re-analyzes everything. |
+| `/project:resolve` | Manage annotations and resolve ambiguities flagged during indexing. |
 
 ## MCP Tools
 
@@ -93,6 +94,11 @@ The ccx MCP server (`ccx.mcp_server`) exposes the following tools:
 | `trigger_index` | Discover project scopes and build hierarchical scope tree (no code analysis). |
 | `get_scope_with_children` | Get a scope's cached analysis with summaries of all descendant scopes. |
 | `mark_stale_cascade` | Mark a scope and all its ancestor scopes as stale. |
+| `get_pending_scopes` | Paginated list of scopes needing analysis (supports prefix filter). |
+| `get_pending_summary` | Grouped counts of unanalyzed scopes by directory. |
+| `get_annotations` | Query annotations by scope/type (supports unresolved_only filter). |
+| `add_annotation` | Add domain/architecture/usage/ambiguity annotation to a scope. |
+| `resolve_ambiguity` | Resolve an ambiguity annotation with an answer. |
 
 ## Architecture
 
@@ -120,7 +126,7 @@ src/ccx/
     __init__.py
     __main__.py
     cli.py                  -- Setup CLI (init, update, status, index)
-    mcp_server.py           -- FastMCP server, 11 tools
+    mcp_server.py           -- FastMCP server, 16 tools
     config.py               -- base-context.yaml loader
     scanner.py              -- Project auto-scan (runtime, framework, db, tree)
     session.py              -- .ccx/session.json file-based session persistence
@@ -141,6 +147,8 @@ src/ccx/
             SKILL.md        -- /project:commit
         index/
             SKILL.md        -- /project:index
+        resolve/
+            SKILL.md        -- /project:resolve
 ```
 
 ## Dependencies

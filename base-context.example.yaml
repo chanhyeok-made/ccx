@@ -37,11 +37,3 @@ exception_rules:
       reason: "프론트엔드 공통 에러 핸들링"
   gotchas:
     - "prisma client는 src/lib/prisma.ts에서만 export"
-
-delegation_defaults:
-  analyzer: "auto"
-  planner: "auto"
-  researcher: "auto"
-  implementer: "confirm_design"
-  reviewer: "auto"
-  committer: "auto"

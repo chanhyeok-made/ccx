@@ -128,6 +128,7 @@ def status(project_dir: str):
         ".claude/skills/review/SKILL.md": (project / ".claude" / "skills" / "review" / "SKILL.md").exists(),
         ".claude/skills/commit/SKILL.md": (project / ".claude" / "skills" / "commit" / "SKILL.md").exists(),
         ".claude/skills/index/SKILL.md": (project / ".claude" / "skills" / "index" / "SKILL.md").exists(),
+        ".claude/skills/resolve/SKILL.md": (project / ".claude" / "skills" / "resolve" / "SKILL.md").exists(),
         ".claude/hooks/log_event.sh": (project / ".claude" / "hooks" / "log_event.sh").exists(),
         ".claude/hooks/log_event.py": (project / ".claude" / "hooks" / "log_event.py").exists(),
         ".mcp.json": (project / ".mcp.json").exists(),
@@ -197,22 +198,24 @@ def index(project_dir: str, reset: bool, verbose: bool):
     click.echo(f"  Packages: {result['packages']}")
     click.echo(f"  Modules:  {result['modules']}")
 
-    if result.get("new_scopes"):
-        click.echo(f"\nNew scopes ({len(result['new_scopes'])}):")
-        for s in result["new_scopes"]:
-            click.echo(f"  + {s}")
+    new_count = result["new_scope_count"]
+    stale_count = result["stale_scope_count"]
 
-    if result.get("stale_scopes"):
-        click.echo(f"\nStale scopes ({len(result['stale_scopes'])}):")
-        for s in result["stale_scopes"]:
-            click.echo(f"  ~ {s}")
+    if new_count:
+        click.echo(f"\n  New scopes:   {new_count}")
+    if stale_count:
+        click.echo(f"  Stale scopes: {stale_count}")
 
-    if verbose and result.get("scope_tree"):
-        click.echo("\nScope tree:")
-        for parent, children in sorted(result["scope_tree"].items()):
-            click.echo(f"  {parent}/")
-            for child in children:
-                click.echo(f"    ├── {child}")
+    if verbose:
+        from ccx.analysis_cache import _load_meta
+        meta = _load_meta(str(project))
+        scope_tree = meta.get("scope_tree", {})
+        if scope_tree:
+            click.echo("\nScope tree:")
+            for parent, children in sorted(scope_tree.items()):
+                click.echo(f"  {parent}/")
+                for child in children:
+                    click.echo(f"    ├── {child}")
 
     click.echo("\nDone. Run '/project:run' or '/project:analyze' to trigger code-level analysis.")
 

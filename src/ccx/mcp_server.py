@@ -3,14 +3,9 @@ MCP Server for ccx.
 Provides project context and session management tools to Claude Code.
 """
 
-import functools
-import inspect
-import time
-
 from mcp.server.fastmcp import FastMCP
 
 from ccx.config import load_base_context
-from ccx.logger import log_tool_call
 from ccx.session import load_session, save_record, get_context_summary
 from ccx.analysis_cache import (
     get_analysis_cache as _get_cache,
@@ -30,58 +25,13 @@ from ccx.analysis_cache import (
 mcp = FastMCP("ccx")
 
 
-def _with_logging(fn):
-    """Decorator that logs every MCP tool call to .ccx/logs/."""
-
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        # Build input dict from call arguments
-        sig = inspect.signature(fn)
-        bound = sig.bind(*args, **kwargs)
-        bound.apply_defaults()
-        input_data = dict(bound.arguments)
-
-        # Extract project_dir (always the first parameter)
-        project_dir = input_data.get("project_dir", "")
-
-        start = time.monotonic()
-        try:
-            result = fn(*args, **kwargs)
-            duration_ms = int((time.monotonic() - start) * 1000)
-            log_tool_call(
-                project_dir=project_dir,
-                tool_name=fn.__name__,
-                input_data=input_data,
-                output_data=result,
-                duration_ms=duration_ms,
-                success=True,
-            )
-            return result
-        except Exception as exc:
-            duration_ms = int((time.monotonic() - start) * 1000)
-            log_tool_call(
-                project_dir=project_dir,
-                tool_name=fn.__name__,
-                input_data=input_data,
-                output_data=None,
-                duration_ms=duration_ms,
-                success=False,
-                error=str(exc),
-            )
-            raise
-
-    return wrapper
-
-
 @mcp.tool()
-@_with_logging
 def load_project_context(project_dir: str) -> dict:
     """Load project base context (stack, architecture, structure, exception rules) from base-context.yaml."""
     return load_base_context(project_dir)
 
 
 @mcp.tool()
-@_with_logging
 def check_rules(changes_description: str, project_dir: str) -> dict:
     """Check if described changes violate any project exception rules.
 
@@ -121,7 +71,6 @@ def check_rules(changes_description: str, project_dir: str) -> dict:
 
 
 @mcp.tool()
-@_with_logging
 def get_session(project_dir: str, limit: int = 10) -> dict:
     """Get recent execution history and context summary.
 
@@ -138,7 +87,6 @@ def get_session(project_dir: str, limit: int = 10) -> dict:
 
 
 @mcp.tool()
-@_with_logging
 def record_execution(
     project_dir: str,
     request: str,
@@ -166,7 +114,6 @@ def record_execution(
 
 
 @mcp.tool()
-@_with_logging
 def get_analysis_cache(
     project_dir: str, scope: str, check_staleness: bool = True
 ) -> dict:
@@ -184,7 +131,6 @@ def get_analysis_cache(
 
 
 @mcp.tool()
-@_with_logging
 def save_analysis_cache(
     project_dir: str,
     scope: str,
@@ -244,7 +190,6 @@ def save_analysis_cache(
 
 
 @mcp.tool()
-@_with_logging
 def invalidate_analysis_cache(project_dir: str, scope: str) -> dict:
     """Invalidate cached analysis for a scope after implementation changes it.
 
@@ -259,7 +204,6 @@ def invalidate_analysis_cache(project_dir: str, scope: str) -> dict:
 
 
 @mcp.tool()
-@_with_logging
 def list_cached_scopes(project_dir: str) -> list[dict]:
     """List all cached analysis scopes with brief info.
 
@@ -270,7 +214,6 @@ def list_cached_scopes(project_dir: str) -> list[dict]:
 
 
 @mcp.tool()
-@_with_logging
 def trigger_index(project_dir: str) -> dict:
     """Discover project scopes and build hierarchical scope tree.
 
@@ -290,7 +233,6 @@ def trigger_index(project_dir: str) -> dict:
 
 
 @mcp.tool()
-@_with_logging
 def get_pending_scopes(
     project_dir: str,
     scope_type: str = "all",
@@ -317,7 +259,6 @@ def get_pending_scopes(
 
 
 @mcp.tool()
-@_with_logging
 def get_pending_summary(project_dir: str, group_depth: int = 1) -> dict:
     """Get a compact summary of pending scopes grouped by top-level directory.
 
@@ -335,7 +276,6 @@ def get_pending_summary(project_dir: str, group_depth: int = 1) -> dict:
 
 
 @mcp.tool()
-@_with_logging
 def get_annotations(
     project_dir: str,
     scope: str = "",
@@ -364,7 +304,6 @@ def get_annotations(
 
 
 @mcp.tool()
-@_with_logging
 def add_annotation(
     project_dir: str,
     scope: str,
@@ -395,7 +334,6 @@ def add_annotation(
 
 
 @mcp.tool()
-@_with_logging
 def resolve_ambiguity(
     project_dir: str, scope: str, question: str, answer: str
 ) -> dict:
@@ -416,7 +354,6 @@ def resolve_ambiguity(
 
 
 @mcp.tool()
-@_with_logging
 def get_scope_with_children(project_dir: str, scope: str, check_staleness: bool = True) -> dict:
     """Get a scope's cached analysis with summaries of all descendant scopes.
 
@@ -429,7 +366,6 @@ def get_scope_with_children(project_dir: str, scope: str, check_staleness: bool 
 
 
 @mcp.tool()
-@_with_logging
 def mark_stale_cascade(project_dir: str, scope: str) -> dict:
     """Mark a scope and all its ancestor scopes as stale.
 

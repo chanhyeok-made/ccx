@@ -5,7 +5,6 @@ Looks for base-context.yaml in the project root, or uses a minimal default.
 
 import yaml
 from pathlib import Path
-from typing import Optional
 
 DEFAULT_BASE_CONTEXT = {
     "project_name": "unknown",
@@ -20,7 +19,7 @@ DEFAULT_BASE_CONTEXT = {
 }
 
 
-def load_base_context(project_dir: str, path: Optional[str] = None) -> dict:
+def load_base_context(project_dir: str, path: str | None = None) -> dict:
     """Load base context from yaml file or return defaults."""
     project_path = Path(project_dir)
 
