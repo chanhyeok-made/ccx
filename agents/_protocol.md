@@ -40,6 +40,26 @@ You MUST end your response with one of two formats:
 
 When the user's intent, target behavior, or design choice is unclear, do NOT guess by referencing similar code. "Similar existing code" is a pattern reference, not a specification. Blocking unknowns (what to build) → use `NEEDS_CONTEXT`. Non-blocking defaults (how to build) → use `ASSUMPTIONS` section.
 
+## Sub-agent Invocation
+
+Subagents may launch further subagents via the Agent tool, subject to these constraints:
+
+- **Max nesting depth:** 2. The orchestrator is depth 0.
+- **`current_depth` context variable:** The orchestrator passes `current_depth=1` when launching a subagent. When a subagent launches another subagent, it MUST increment and forward `current_depth` (i.e., pass `current_depth=2`).
+- **Depth guard:** If `current_depth >= 2`, the subagent MUST NOT invoke the Agent tool. Perform the work directly instead.
+- **Required context forwarding:** Every Agent invocation MUST include the original `project_dir` and the incremented `current_depth` in the launch prompt. Omitting either is a protocol violation.
+
+## Agent Config Loading
+
+At startup, if `project_dir` is available, call `mcp__ccx__get_agent_config(project_dir, agent_name)` where `agent_name` is this agent's identifier (e.g. "implementer", "reviewer").
+
+If the config `exists`:
+- **rules**: Treat as additional constraints alongside any project-level rules. Apply them throughout your work.
+- **context**: Prepend to your understanding of the task as additional background information.
+- **disabled_rules**: If any project-level rule (from `check_rules`) matches a disabled rule string, skip enforcing it.
+
+If the config does not exist (`exists: false`), proceed with default behavior — no extra rules or context apply.
+
 ## Analysis Cache Protocol
 
 When working with scopes:

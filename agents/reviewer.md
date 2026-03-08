@@ -33,3 +33,6 @@ Verdict: approve | reject | request_changes
 Issues: ...
 Summary: ...
 ```
+
+## Sub-agents
+- `ccx:module-analyzer` — 특정 모듈의 상세 분석이 필요할 때 호출. current_depth를 +1하여 전달.

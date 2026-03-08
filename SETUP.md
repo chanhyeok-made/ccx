@@ -130,6 +130,10 @@ The ccx MCP server (`ccx.mcp_server`) exposes the following tools:
 | `get_annotations`            | Query annotations by scope/type (supports unresolved_only filter).                |
 | `add_annotation`             | Add domain/architecture/usage/ambiguity annotation to a scope.                    |
 | `resolve_ambiguity`          | Resolve an ambiguity annotation with an answer.                                   |
+| `get_agent_config`           | Get agent-specific rules, context, and disabled rules.                            |
+| `save_agent_config`          | Save or update agent-specific configuration.                                      |
+| `delete_agent_config`        | Delete agent-specific configuration file.                                         |
+| `list_agent_configs`         | List all agents and their configuration status.                                   |
 
 ### MCP Tool Namespace Mapping
 
@@ -143,6 +147,65 @@ Skill and agent files in this repository reference MCP tools using the **canonic
 The longer plugin prefix follows the Claude Code convention `mcp__plugin_{plugin}_{server}__`, where both `{plugin}` and `{server}` happen to be `ccx`.
 
 **You do not need to change skill or agent files.** Claude Code resolves the canonical `mcp__ccx__` references to the correct runtime prefix automatically, so all skill and agent Markdown files keep the short form.
+
+## Nested Sub-agents
+
+Agents can spawn other agents as sub-agents, enabling task decomposition without returning control to the orchestrator. The system enforces a maximum nesting depth of **2** to prevent runaway recursion.
+
+Each agent invocation carries a `current_depth` counter. When an agent spawns a sub-agent it increments the counter by 1. If `current_depth` reaches the limit, the agent must complete the work itself or return partial results instead of delegating further.
+
+**How depth tracking works:**
+
+```
+Orchestrator (depth 0)
+    -> Implementer (depth 1)
+        -> Researcher (depth 2)   # allowed, max depth reached
+            -> (blocked)          # depth 3 would exceed limit
+```
+
+**Practical examples:**
+
+| Parent agent | Sub-agent | Purpose |
+|---|---|---|
+| Implementer | Researcher | Gather context about unfamiliar modules before making changes. |
+| Reviewer | Module-analyzer | Deep-dive into a specific module's design when reviewing changes. |
+
+Sub-agents follow the same protocol as top-level agents: they receive context via MCP tools, return structured `STATUS: COMPLETE` or `STATUS: NEEDS_CONTEXT` results, and never interact with the user directly.
+
+## Agent Configuration
+
+Each agent can have a per-project configuration file stored at `.ccx/agents/{agent-name}.yaml`. These files let you customize agent behavior without modifying the shared agent definitions in the plugin.
+
+**YAML schema:**
+
+```yaml
+# .ccx/agents/implementer.yaml
+rules:
+  - "Always add type hints to new functions."
+  - "Prefer composition over inheritance."
+
+context:
+  - "This project uses the repository pattern for data access."
+  - "All database queries go through src/db/queries.py."
+
+disabled_rules:
+  - "no-inline-styles"   # Not applicable to this backend-only project.
+```
+
+| Field            | Type       | Description                                                        |
+|------------------|------------|--------------------------------------------------------------------|
+| `rules`          | `string[]` | Additional rules the agent must follow in this project.            |
+| `context`        | `string[]` | Extra context injected into the agent's prompt.                    |
+| `disabled_rules` | `string[]` | Base rules to suppress for this agent in this project.             |
+
+**MCP tool workflow:**
+
+- `list_agent_configs` -- See which agents have configuration and which use defaults.
+- `get_agent_config` -- Read a specific agent's configuration.
+- `save_agent_config` -- Create or update an agent's configuration.
+- `delete_agent_config` -- Remove an agent's configuration (reverts to defaults).
+
+The orchestrator automatically injects the relevant agent configuration into sub-agent prompts when spawning them. If no configuration file exists for an agent, it runs with default behavior.
 
 ## Architecture
 
@@ -207,11 +270,18 @@ agents/
     researcher.md           -- Researcher agent definition
     reviewer.md             -- Reviewer agent definition
 
+# --- Project-side (created by `ccx init` in your project) ---
+
+.ccx/
+    agents/                 -- Per-agent configuration overrides (YAML)
+    session.json            -- Session persistence
+    analysis_cache/         -- Scope-based analysis cache
+
 src/ccx/
     __init__.py
     __main__.py
     cli.py                  -- Setup CLI (init, update, status, index)
-    mcp_server.py           -- FastMCP server, 16 tools
+    mcp_server.py           -- FastMCP server, 20 tools
     config.py               -- base-context.yaml loader
     scanner.py              -- Project auto-scan (runtime, framework, db, tree)
     session.py              -- .ccx/session.json file-based session persistence

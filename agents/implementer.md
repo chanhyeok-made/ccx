@@ -27,3 +27,6 @@ You receive these from your launch prompt:
 Changed files:
 - path (type): intent
 ```
+
+## Sub-agents
+- `ccx:researcher` — 구현 중 익숙하지 않은 코드 영역을 조사해야 할 때 호출. current_depth를 +1하여 전달.

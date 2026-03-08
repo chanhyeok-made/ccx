@@ -7,6 +7,12 @@ from mcp.server.fastmcp import FastMCP
 
 from ccx.config import load_base_context
 from ccx.session import load_session, save_record, get_context_summary
+from ccx.agent_config import (
+    get_agent_config as _get_agent_config,
+    save_agent_config as _save_agent_config,
+    delete_agent_config as _delete_agent_config,
+    list_agent_configs as _list_agent_configs,
+)
 from ccx.analysis_cache import (
     get_analysis_cache as _get_cache,
     save_analysis_cache as _save_cache,
@@ -379,6 +385,70 @@ def mark_stale_cascade(project_dir: str, scope: str) -> dict:
         scope: Scope key to mark as stale.
     """
     return _mark_stale(project_dir, scope)
+
+
+@mcp.tool()
+def get_agent_config(project_dir: str, agent_name: str) -> dict:
+    """Get agent-specific rules, context, and disabled rules.
+
+    Args:
+        project_dir: Project root directory path.
+        agent_name: Agent name (e.g. "implementer", "reviewer").
+
+    Returns:
+        Dict with agent, rules, context, disabled_rules, exists.
+    """
+    return _get_agent_config(project_dir, agent_name)
+
+
+@mcp.tool()
+def save_agent_config(
+    project_dir: str,
+    agent_name: str,
+    rules: list[str] | None = None,
+    context: str | None = None,
+    disabled_rules: list[str] | None = None,
+) -> dict:
+    """Save or update agent-specific configuration.
+
+    Args:
+        project_dir: Project root directory path.
+        agent_name: Agent name.
+        rules: Custom rules for this agent.
+        context: Additional context string.
+        disabled_rules: Base-context rules to disable for this agent.
+
+    Returns:
+        Dict with status and agent name.
+    """
+    return _save_agent_config(project_dir, agent_name, rules, context, disabled_rules)
+
+
+@mcp.tool()
+def delete_agent_config(project_dir: str, agent_name: str) -> dict:
+    """Delete agent-specific configuration file.
+
+    Args:
+        project_dir: Project root directory path.
+        agent_name: Agent name.
+
+    Returns:
+        Dict with status (deleted/not_found) and agent name.
+    """
+    return _delete_agent_config(project_dir, agent_name)
+
+
+@mcp.tool()
+def list_agent_configs(project_dir: str) -> dict:
+    """List all agents and their configuration status.
+
+    Args:
+        project_dir: Project root directory path.
+
+    Returns:
+        Dict with agents list and configured_count.
+    """
+    return _list_agent_configs(project_dir)
 
 
 def main():

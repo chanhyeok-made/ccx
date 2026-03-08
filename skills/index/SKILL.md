@@ -2,7 +2,7 @@
 name: index
 description: "Perform code-level analysis on all project scopes and cache results"
 argument-hint: "[--force to re-analyze all scopes, or leave empty for incremental]"
-allowed-tools: Read, Grep, Glob, Bash, Agent, mcp__ccx__load_project_context, mcp__ccx__trigger_index, mcp__ccx__get_analysis_cache, mcp__ccx__save_analysis_cache, mcp__ccx__invalidate_analysis_cache, mcp__ccx__list_cached_scopes
+allowed-tools: Read, Grep, Glob, Bash, Agent, mcp__ccx__load_project_context, mcp__ccx__trigger_index, mcp__ccx__get_analysis_cache, mcp__ccx__save_analysis_cache, mcp__ccx__invalidate_analysis_cache, mcp__ccx__list_cached_scopes, mcp__ccx__get_agent_config
 ---
 
 # Project Code-Level Indexing
@@ -61,6 +61,15 @@ mcp__ccx__save_analysis_cache(project_dir, scope="_preflight", summary="permissi
 
 ### 5. Analyze Each Scope
 
+**Agent Config Injection** — Before launching each subagent (module-analyzer, package-synthesizer), call `mcp__ccx__get_agent_config(project_dir, agent_name)` where `agent_name` matches the subagent type (e.g. `"module-analyzer"`, `"package-synthesizer"`). If the config exists (non-null response), append an `## Agent Config` block to the subagent prompt:
+
+```
+## Agent Config
+rules: {rules from get_agent_config}
+context: {context from get_agent_config}
+disabled_rules: {disabled_rules from get_agent_config}
+```
+
 For each target scope in topological order, output progress:
 
 ```
@@ -71,14 +80,14 @@ For each target scope in topological order, output progress:
 
 Launch `Agent` with `subagent_type: "ccx:module-analyzer"`. Prompt:
 
-> project_dir="{project_dir}"
+> project_dir="{project_dir}", current_depth=1
 > scope_key="{scope_key}", files={files list}, parent_key="{parent_key}"
 
 #### For package scopes (type = "package"):
 
 Launch `Agent` with `subagent_type: "ccx:package-synthesizer"`. Prompt:
 
-> project_dir="{project_dir}"
+> project_dir="{project_dir}", current_depth=1
 > scope_key="{scope_key}", children={children scope keys}, package_files={direct files}, parent_key="{parent_key}"
 
 ### 6. Summary

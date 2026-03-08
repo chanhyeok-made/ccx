@@ -3,7 +3,7 @@ name: run
 description: "Full development pipeline: analyze -> plan -> implement -> review -> commit"
 disable-model-invocation: true
 argument-hint: "[request description]"
-allowed-tools: Read, Bash, Agent, Skill, TaskCreate, TaskUpdate, TaskList, TaskGet, AskUserQuestion, mcp__ccx__record_execution, mcp__ccx__invalidate_analysis_cache, mcp__ccx__trigger_index, mcp__ccx__mark_stale_cascade, mcp__ccx__list_cached_scopes, mcp__ccx__get_scope_with_children
+allowed-tools: Read, Bash, Agent, Skill, TaskCreate, TaskUpdate, TaskList, TaskGet, AskUserQuestion, mcp__ccx__record_execution, mcp__ccx__invalidate_analysis_cache, mcp__ccx__trigger_index, mcp__ccx__mark_stale_cascade, mcp__ccx__list_cached_scopes, mcp__ccx__get_scope_with_children, mcp__ccx__get_agent_config
 ---
 
 # Full Development Pipeline
@@ -38,16 +38,25 @@ CHECKPOINT("이 계획대로 진행할까요?", "계획 확인", ["Proceed", "Mo
 
 ## Phase 3: Execute
 
+**Agent Config Injection** — Before launching each subagent (researcher, implementer, reviewer), call `mcp__ccx__get_agent_config(project_dir, agent_name)` where `agent_name` matches the subagent type (e.g. `"researcher"`, `"implementer"`, `"reviewer"`). If the config exists (non-null response), append an `## Agent Config` block to the subagent prompt:
+
+```
+## Agent Config
+rules: {rules from get_agent_config}
+context: {context from get_agent_config}
+disabled_rules: {disabled_rules from get_agent_config}
+```
+
 For each task in dependency order, output `### Executing T{N}: {description}`:
 
 **3a. Research** — Launch `ccx:researcher` Agent:
-> project_dir="{project_dir}", task_description="{task}"
+> project_dir="{project_dir}", current_depth=1, task_description="{task}"
 
 **3b. Implement** — Launch `ccx:implementer` Agent:
-> project_dir="{project_dir}", task_description="{task}", files="{from 3a}", impact_zone="{from 3a}"
+> project_dir="{project_dir}", current_depth=1, task_description="{task}", files="{from 3a}", impact_zone="{from 3a}"
 
 **3c. Review** — Launch `ccx:reviewer` Agent:
-> project_dir="{project_dir}", task_description="{task}", changed_files="{from 3b}", impact_zone="{from 3a}"
+> project_dir="{project_dir}", current_depth=1, task_description="{task}", changed_files="{from 3b}", impact_zone="{from 3a}"
 
 On reject → re-implement → re-review (max 3). After approval, `mcp__ccx__mark_stale_cascade` for affected scopes. Mark task done via `TaskUpdate`.
 
