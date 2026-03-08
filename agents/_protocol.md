@@ -14,7 +14,7 @@ You MUST end your response with one of two formats:
 
 ```
 === STATUS: COMPLETE ===
-[your phase-specific results here]
+[Output Schema 필드를 레이블링하여 출력 — 아래 Schema Convention 참고]
 === ASSUMPTIONS (if any) ===
 1. [assumption] — reason — alternatives: [opt1, opt2]
 === END ===
@@ -30,6 +30,39 @@ You MUST end your response with one of two formats:
 1. {question: "...", suggested_answers: ["a", "b", "c"]}
 === END ===
 ```
+
+## Schema Convention
+
+각 에이전트 `.md` 파일은 반드시 다음 두 섹션을 포함해야 한다.
+
+### Input Schema
+
+에이전트가 launch prompt로 받는 모든 파라미터를 테이블 형식으로 정의한다.
+
+```
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| project_dir | string | yes | 프로젝트 루트 경로 |
+| ... | ... | ... | ... |
+```
+
+### Output Schema
+
+에이전트가 `STATUS: COMPLETE` 블록 내에 반환해야 하는 모든 필드를 테이블 형식으로 정의한다.
+
+```
+| Field | Type | Required | Chaining | Description |
+|-------|------|----------|----------|-------------|
+| intent | string | yes | → planner.intent | 분석된 의도 |
+| ... | ... | ... | | ... |
+```
+
+### Schema Rules
+
+1. **Output 형식 강제**: `STATUS: COMPLETE` 뒤에 각 required 필드를 명시적으로 레이블링하여 출력한다. 예: `Intent: ...`, `Files: [...]`
+2. **자체 검증**: 에이전트는 출력 직전 Output Schema의 모든 required 필드가 포함되었는지 자체 확인한다.
+3. **체이닝 명시**: Output Schema의 Chaining 열에 `→ {target_agent}.{input_field}` 형식으로 다음 에이전트에 전달되는 대상을 명시한다. 체이닝 대상이 없으면 빈 칸으로 둔다.
+4. **Type 종류**: `string`, `list[string]`, `list[object]`, `enum[a|b|c]`, `table`, `markdown` 중 하나를 사용한다.
 
 ## Decision Guide
 

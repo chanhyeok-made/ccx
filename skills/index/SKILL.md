@@ -108,6 +108,8 @@ All scopes are now cached and available for future analysis.
 
 ## Rules
 
+**Schema compliance** — Every subagent MUST produce output that includes all required fields defined in its Output Schema. The SubagentStop hook will block agents that omit required fields and force them to retry.
+
 - Do NOT ask the user any questions during indexing — this is a fully automated process.
 - If a subagent fails on a scope, log the error and continue with the next scope. Do not abort the entire process.
 - Scope naming: project-root-relative path, no extension, lowercase, forward slashes.

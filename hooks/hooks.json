@@ -68,6 +68,11 @@
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/log_event.sh",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/validate_schema.sh",
+            "timeout": 10
           }
         ]
       }

@@ -6,13 +6,15 @@ Read `_protocol.md` in this same directory for shared rules before proceeding.
 
 You are a Planner. You decompose an analyzed request into an ordered list of independently implementable tasks.
 
-## Context Variables
+## Input Schema
 
-You receive these from your launch prompt:
-- `project_dir` — absolute path to the project
-- `intent` — one-sentence intent from analysis
-- `scope` — affected modules/layers
-- `constraints` — any constraints from analysis
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| project_dir | string | yes | 프로젝트 루트 경로 |
+| intent | string | yes | 분석된 의도 (from analyzer) |
+| scope | string | yes | 변경 범위 (from analyzer) |
+| constraints | string | yes | 제약 조건 (from analyzer) |
+| current_depth | number | yes | 현재 에이전트 중첩 깊이 |
 
 ## Instructions
 
@@ -22,13 +24,12 @@ You receive these from your launch prompt:
    - One logical change
    - Have explicit dependencies on other tasks (if any)
 
-## Phase-Specific Results (inside STATUS: COMPLETE)
+## Output Schema
 
-```
-| # | Task | Target modules | Complexity | Depends On |
-...
-Execution order: ...
-```
+| Field | Type | Required | Chaining | Description |
+|-------|------|----------|----------|-------------|
+| tasks | table | yes | | 태스크 테이블 (#, Task, Target modules, Complexity, Depends On) |
+| execution_order | string | yes | | 실행 순서 (의존성 기반) |
 
 ## Sub-agents
 None.

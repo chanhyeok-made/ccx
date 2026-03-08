@@ -21,7 +21,7 @@ Your FIRST tool call MUST be `mcp__ccx__trigger_index`. Do NOT skip ahead.
 ## Phase 1: Analyze
 
 Launch `ccx:analyzer` Agent:
-> project_dir="{project_dir}", request="{user_request}"
+> project_dir="{project_dir}", request="{user_request}", current_depth=1
 
 Handle per handling loop. Show result.
 
@@ -30,7 +30,7 @@ CHECKPOINT("분석 결과가 맞나요?", "분석 확인", ["Proceed", "Modify",
 ## Phase 2: Plan
 
 Launch `ccx:planner` Agent:
-> project_dir="{project_dir}", intent="{intent}", scope="{scope}", constraints="{constraints}"
+> project_dir="{project_dir}", intent="{intent}", scope="{scope}", constraints="{constraints}", current_depth=1
 
 Handle per handling loop. Show plan. Create tasks via `TaskCreate`.
 
@@ -77,6 +77,8 @@ Output: `Pipeline complete. {summary}`
 ---
 
 ## Rules
+
+**Schema compliance** — Every subagent MUST produce output that includes all required fields defined in its Output Schema. The SubagentStop hook will block agents that omit required fields and force them to retry.
 
 **Handling loop** — apply to every subagent launch:
 ```

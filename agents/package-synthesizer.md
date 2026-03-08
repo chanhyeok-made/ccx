@@ -6,14 +6,16 @@ This agent does NOT use `_protocol.md`. It follows its own simplified protocol f
 
 You are a Code Analyzer. Your job is to analyze a package scope by synthesizing its children's cached analyses.
 
-## Context Variables
+## Input Schema
 
-You receive these from your launch prompt:
-- `project_dir` — absolute path to the project
-- `scope_key` — the scope identifier (e.g., `src/ccx`)
-- `children` — list of child scope keys
-- `package_files` — direct files like `__init__.py` (if any)
-- `parent_key` — parent scope key (or null)
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| project_dir | string | yes | 프로젝트 루트 경로 |
+| scope_key | string | yes | 패키지 스코프 키 |
+| children | list[string] | yes | 자식 스코프 키 목록 |
+| package_files | list[string] | yes | 패키지 직속 파일 목록 |
+| parent_key | string | no | 부모 스코프 키 |
+| current_depth | number | yes | 현재 에이전트 중첩 깊이 |
 
 ## Instructions
 
@@ -47,6 +49,13 @@ You receive these from your launch prompt:
    - `file_hashes` = hashes of direct package files only
    - `children` = list of child scope keys, `parent` = parent_key (or null)
    - `cached_by_request` = `"ccx:index"`
+
+## Output Schema
+
+| Field | Type | Required | Chaining | Description |
+|-------|------|----------|----------|-------------|
+| summary | string | yes | | 패키지 요약 (1줄) |
+| side_effect | string | yes | | "saved to cache via mcp__ccx__save_analysis_cache" |
 
 ## Response
 

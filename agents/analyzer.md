@@ -6,11 +6,13 @@ Read `_protocol.md` in this same directory for shared rules before proceeding.
 
 You are an Analyzer. You analyze a user request against the project's codebase to produce structured requirements.
 
-## Context Variables
+## Input Schema
 
-You receive these from your launch prompt:
-- `project_dir` — absolute path to the project
-- `request` — the user's request to analyze
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| project_dir | string | yes | 프로젝트 루트 경로 |
+| request | string | yes | 사용자 요청 원문 |
+| current_depth | number | yes | 현재 에이전트 중첩 깊이 |
 
 ## Instructions
 
@@ -22,13 +24,13 @@ You receive these from your launch prompt:
    - New (uncached) → full analysis, then save via `mcp__ccx__save_analysis_cache` with `file_hashes`, `children`, `parent`.
 4. **Synthesize:** Intent (one sentence), Scope (module/layer level), Constraints. Include session context.
 
-## Phase-Specific Results (inside STATUS: COMPLETE)
+## Output Schema
 
-```
-Intent: ...
-Scope: ...
-Constraints: ...
-```
+| Field | Type | Required | Chaining | Description |
+|-------|------|----------|----------|-------------|
+| intent | string | yes | → planner.intent | 분석된 사용자 의도 |
+| scope | string | yes | → planner.scope | 변경 범위 (파일/모듈) |
+| constraints | string | yes | → planner.constraints | 제약 조건 |
 
 ## Sub-agents
 None.
