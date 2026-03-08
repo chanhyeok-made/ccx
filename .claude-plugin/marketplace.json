@@ -6,8 +6,17 @@
   "plugins": [
     {
       "name": "ccx",
-      "source": ".",
-      "description": "Claude Code extension for project-aware development pipeline with analysis cache, session management, and automated workflows"
+      "description": "Claude Code extension for project-aware development pipeline with analysis cache, session management, and automated workflows",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./.claude-plugin/skills/run",
+        "./.claude-plugin/skills/analyze",
+        "./.claude-plugin/skills/review",
+        "./.claude-plugin/skills/commit",
+        "./.claude-plugin/skills/index",
+        "./.claude-plugin/skills/resolve"
+      ]
     }
   ]
 }
