@@ -117,6 +117,6 @@ All scopes are now cached and available for future analysis.
 
 ## Pipeline Integration
 
-When called from `/ccx:run` (Phase 0), this skill receives no `$ARGUMENTS`. It runs in incremental mode and returns its summary to the orchestrator. The orchestrator can then proceed to Phase 1 (Adaptive Plan) with a fully warmed cache.
+This skill is invoked as a background subagent by the planner (when `trigger_index` finds new/stale scopes) or standalone via `/ccx:index`. When called without `$ARGUMENTS`, it runs in incremental mode. Background invocation uses `run_in_background: true` — the caller does not wait for the result.
 
 Arguments: $ARGUMENTS

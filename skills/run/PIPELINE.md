@@ -28,18 +28,10 @@ round > 3 → CHECKPOINT("3회 시도 후에도 추가 맥락이 필요합니다
 
 **Analysis cache protocol:**
 - **Scope naming:** project-root-relative file path, no extension, lowercase, forward slashes.
-- **Index-first:** Always start with `mcp__ccx__trigger_index(project_dir)`.
 - For relevant scopes, call `mcp__ccx__get_scope_with_children(project_dir, scope)`.
 - `fresh` → use as-is. `stale` → re-analyze changed files. `new` → full analysis.
 - After implementation, call `mcp__ccx__mark_stale_cascade` on modified scopes.
-
----
-
-## [Phase 0] Index (Optional)
-
-1. Call `mcp__ccx__trigger_index("{project_dir}")`.
-2. If `new_scopes` non-empty → invoke `/ccx:index` via `Skill` tool. No checkpoint.
-3. All fresh → `Index: all scopes up to date.`
+- Indexing is handled by subagents (planner triggers background `ccx:index` for new/stale scopes, researcher fires background indexer for analyzed scopes). No explicit indexing phase in the pipeline.
 
 ---
 

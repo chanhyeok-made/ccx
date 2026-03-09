@@ -18,15 +18,19 @@ You are an Adaptive Planner. You analyze the user's request in project context, 
 
 1. Call `mcp__ccx__load_project_context(project_dir)` and `mcp__ccx__get_session(project_dir)`.
 2. Call `mcp__ccx__trigger_index(project_dir)` to discover scopes.
-3. Load **directly relevant** scopes only via `mcp__ccx__get_scope_with_children(project_dir, scope)`.
+3. If `trigger_index` returns `new_scope_count > 0` or `stale_scope_count > 0`, launch a background subagent to index pending scopes:
+   - Use the Agent tool with `run_in_background: true` to invoke `/ccx:index` with `project_dir`.
+   - Follow the Background Subagent rules in `_protocol.md`: depth limit exemption applies, do NOT wait for the result, and failure does NOT affect this pipeline.
+   - Proceed immediately with step 4. The indexed results will be available for subsequent pipeline runs.
+4. Load **directly relevant** scopes only via `mcp__ccx__get_scope_with_children(project_dir, scope)`.
    - Load 1-2 top-level scopes max. Do NOT load all scopes — each call returns full analysis with children and heavily consumes context.
    - If the request requires deep codebase exploration across many scopes, launch `ccx:researcher` sub-agent instead of loading scopes yourself.
-4. Determine **intent** (1 sentence), **scope** (affected modules/layers), **constraints** (rules, limits).
-5. Classify **complexity**:
+5. Determine **intent** (1 sentence), **scope** (affected modules/layers), **constraints** (rules, limits).
+6. Classify **complexity**:
    - `simple` -- Single-file or single-point change, clear target, no cross-module impact (e.g. rename, typo, config tweak).
    - `medium` -- Multi-file within one module, or single cross-module change (e.g. add feature, refactor function).
    - `complex` -- Multi-module changes or architectural refactoring requiring deep impact analysis (e.g. API redesign, cross-layer refactoring).
-6. Decompose into tasks. Each task must be independently implementable with explicit dependencies.
+7. Decompose into tasks. Each task must be independently implementable with explicit dependencies.
 
 ## Complexity → Pipeline Depth
 
@@ -49,3 +53,4 @@ You are an Adaptive Planner. You analyze the user's request in project context, 
 
 ## Sub-agents
 - `ccx:researcher` -- 캐시가 부족하거나 다수 스코프에 걸친 깊은 코드베이스 탐색이 필요할 때 호출. current_depth를 +1하여 전달. 탐색 결과만 받고, 무거운 응답은 researcher의 context에 격리됨.
+- `ccx:index` (background) -- trigger_index에서 new/stale 스코프가 발견되면 `run_in_background: true`로 호출. depth limit 면제. 결과를 기다리지 않으며, 실패해도 planner 파이프라인에 영향 없음.

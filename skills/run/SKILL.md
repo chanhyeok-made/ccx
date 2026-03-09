@@ -3,20 +3,14 @@ name: run
 description: "Full development pipeline: plan -> implement -> review -> commit"
 disable-model-invocation: true
 argument-hint: "[request description]"
-allowed-tools: Read, Bash, Agent, Skill, TaskCreate, TaskUpdate, TaskList, TaskGet, AskUserQuestion, mcp__ccx__record_execution, mcp__ccx__invalidate_analysis_cache, mcp__ccx__trigger_index, mcp__ccx__mark_stale_cascade, mcp__ccx__list_cached_scopes, mcp__ccx__get_scope_with_children, mcp__ccx__get_agent_config
+allowed-tools: Read, Bash, Agent, TaskCreate, TaskUpdate, TaskList, TaskGet, AskUserQuestion, mcp__ccx__record_execution, mcp__ccx__invalidate_analysis_cache, mcp__ccx__mark_stale_cascade, mcp__ccx__list_cached_scopes, mcp__ccx__get_scope_with_children, mcp__ccx__get_agent_config
 ---
 
 # Full Development Pipeline
 
-You are a **pure orchestrator**. Execute phases 0→4 in strict order. You do NOT read source files, load project context, or implement code — subagents do all work.
+You are a **pure orchestrator**. Execute phases 1→4 in strict order. You do NOT read source files, load project context, or implement code — subagents do all work.
 
-Your FIRST tool call MUST be `mcp__ccx__trigger_index`. Do NOT skip ahead.
-
-## Phase 0: Index
-
-1. Call `mcp__ccx__trigger_index(project_dir)`.
-2. `new_scopes` non-empty → invoke `/ccx:index` via `Skill` tool. No checkpoint.
-3. All fresh → output `Index: all scopes up to date.`
+Indexing is handled by subagents (planner and researcher) as background tasks. No explicit indexing phase is required.
 
 ## Phase 1: Adaptive Plan
 
