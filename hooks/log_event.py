@@ -11,10 +11,38 @@ Always exits 0 to never block Claude Code.
 import json
 import os
 import sys
+import traceback
 from datetime import datetime, timezone
 
 # Allow importing ccx package when running as a standalone hook script
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+
+def _log_error(project_dir: str, source: str, event: str | None,
+               session_id: str | None, exc: Exception) -> None:
+    """Append a hook error record to .ccx/logs/hook_errors.jsonl.
+
+    Never raises — error logging must not break the hook.
+    """
+    try:
+        log_dir = os.path.join(project_dir, ".ccx", "logs")
+        os.makedirs(log_dir, exist_ok=True)
+
+        record = {
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "source": source,
+            "event_type": event,
+            "session_id": session_id,
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+            "traceback": traceback.format_exception(exc),
+        }
+
+        log_path = os.path.join(log_dir, "hook_errors.jsonl")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 
 def _track_tokens(event: str, data: dict, project_dir: str, session_id: str,
@@ -32,8 +60,8 @@ def _track_tokens(event: str, data: dict, project_dir: str, session_id: str,
             if agent_transcript:
                 agent_usage = parse_transcript(agent_transcript)
                 save_agent_usage(project_dir, session_id, agent_usage)
-    except Exception:
-        pass  # Never let token tracking break event logging
+    except Exception as e:
+        _log_error(project_dir, "_track_tokens", event, session_id, e)
 
 
 def _track_context(event: str, data: dict, project_dir: str, session_id: str,
@@ -51,8 +79,8 @@ def _track_context(event: str, data: dict, project_dir: str, session_id: str,
             if agent_transcript:
                 context_usage = parse_context_usage(agent_transcript)
                 save_context_usage(project_dir, session_id, context_usage)
-    except Exception:
-        pass  # Never let context tracking break event logging
+    except Exception as e:
+        _log_error(project_dir, "_track_context", event, session_id, e)
 
 
 def main():
@@ -98,6 +126,7 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except Exception:
-        pass
+    except Exception as e:
+        project_dir = os.environ.get("CLAUDE_PROJECT_DIR", ".")
+        _log_error(project_dir, "main", None, None, e)
     sys.exit(0)
