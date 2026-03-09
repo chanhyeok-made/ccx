@@ -213,7 +213,14 @@ def usage(project_dir: str, limit: int, detail: str):
         ("Cache Read",    "total_cache_read_input_tokens",     10, _format_tokens),
         ("Output",        "total_output_tokens",        10, _format_tokens),
         ("Total",         "total_tokens",               10, _format_tokens),
+        ("Trend",         "_trend",                     10, lambda v: v),
     ]
+
+    # Pre-compute per-session sparkline character (total_tokens across sessions)
+    total_values = [s.get("total_tokens", 0) for s in sessions]
+    trend_chars = _sparkline(total_values) if total_values else ""
+    for i, s in enumerate(sessions):
+        s["_trend"] = trend_chars[i] if i < len(trend_chars) else " "
 
     # Header
     header = "  ".join(h.ljust(w) for h, _, w, _ in columns)
@@ -223,7 +230,7 @@ def usage(project_dir: str, limit: int, detail: str):
     # Rows
     for s in sessions:
         row = "  ".join(
-            fmt(s.get(key, 0)).rjust(w) if key != "session_id" and key != "timestamp" else fmt(s.get(key, "")).ljust(w)
+            fmt(s.get(key, 0)).rjust(w) if key not in ("session_id", "timestamp", "_trend") else fmt(s.get(key, "")).ljust(w)
             for _, key, w, fmt in columns
         )
         click.echo(row)
@@ -241,7 +248,7 @@ def usage(project_dir: str, limit: int, detail: str):
     for h, key, w, fmt in columns:
         if key == "session_id":
             total_row_parts.append("TOTAL".ljust(w))
-        elif key == "timestamp":
+        elif key in ("timestamp", "_trend"):
             total_row_parts.append("".ljust(w))
         elif key == "agent_count":
             total_row_parts.append("".rjust(w))
@@ -345,7 +352,14 @@ def context(project_dir: str, limit: int, detail: str):
         ("Avg Fill",     "avg_context_fill",       10, _format_tokens),
         ("Final Fill",   "final_context_fill",     10, _format_tokens),
         ("Compactions",  "total_compaction_count",  11, lambda v: str(v)),
+        ("Trend",        "_trend",                 10, lambda v: v),
     ]
+
+    # Pre-compute per-session sparkline character (max context fill across sessions)
+    fill_values = [s.get("total_max_context_fill", 0) for s in sessions]
+    trend_chars = _sparkline(fill_values) if fill_values else ""
+    for i, s in enumerate(sessions):
+        s["_trend"] = trend_chars[i] if i < len(trend_chars) else " "
 
     header = "  ".join(h.ljust(w) for h, _, w, _ in columns)
     click.echo(header)
@@ -354,7 +368,7 @@ def context(project_dir: str, limit: int, detail: str):
     for s in sessions:
         row = "  ".join(
             fmt(s.get(key, 0)).rjust(w)
-            if key not in ("session_id", "timestamp")
+            if key not in ("session_id", "timestamp", "_trend")
             else fmt(s.get(key, "")).ljust(w)
             for _, key, w, fmt in columns
         )
@@ -405,6 +419,19 @@ def _show_context_detail(project_dir: str, session_id: str):
                 parts.append(fmt(val).rjust(w))
         click.echo("  ".join(parts))
 
+    # Context fill trend per agent (sparkline)
+    has_turns = any(a.get("turns") for a in agents)
+    if has_turns:
+        click.echo("")
+        click.echo("Context fill trend:")
+        for agent in agents:
+            turns = agent.get("turns", [])
+            if turns:
+                fills = [t.get("context_fill", 0) for t in turns]
+                agent_id = agent.get("agent_id", "unknown")[:20]
+                spark = _sparkline(fills)
+                click.echo(f"  {agent_id}: {spark}")
+
     # Compaction detail per agent
     has_compactions = any(a.get("compaction_points") for a in agents)
     if has_compactions:
@@ -422,6 +449,107 @@ def _show_context_detail(project_dir: str, session_id: str):
         f"  Total: max_fill={_format_tokens(data.get('total_max_context_fill', 0))}"
         f"  compactions={data.get('total_compaction_count', 0)}"
     )
+
+
+@cli.command()
+@click.argument("project_dir", default=".", type=click.Path(exists=True))
+@click.option("--port", default=8484, show_default=True, help="Server port for local dashboard")
+@click.option("--export", "export_html", is_flag=True, help="Export HTML file instead of starting server")
+@click.option("--limit", "-n", default=50, show_default=True, help="Number of sessions to include")
+def dashboard(project_dir: str, port: int, export_html: bool, limit: int):
+    """Launch a local dashboard with usage metrics and execution history.
+
+    By default starts a local HTTP server and opens the browser.
+    Use --export to save the HTML to .ccx/dashboard.html instead.
+    """
+    from ccx.dashboard import generate_html
+
+    project = Path(project_dir).resolve()
+    ccx_dir = project / ".ccx"
+
+    if not ccx_dir.exists():
+        click.echo("Error: ccx is not initialized. Run 'ccx init' first.", err=True)
+        sys.exit(1)
+
+    click.echo(f"Generating dashboard for: {project}")
+    html = generate_html(str(project), limit=limit)
+
+    if export_html:
+        out_path = ccx_dir / "dashboard.html"
+        out_path.write_text(html, encoding="utf-8")
+        click.echo(f"Dashboard exported to: {out_path}")
+        return
+
+    # Serve locally via stdlib http.server
+    import http.server
+    import webbrowser
+
+    class _DashboardHandler(http.server.BaseHTTPRequestHandler):
+        """Serve the generated HTML on GET /."""
+
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(html.encode("utf-8"))
+
+        def log_message(self, format, *args):
+            # Silence default request logging
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", port), _DashboardHandler)
+    url = f"http://127.0.0.1:{port}"
+    click.echo(f"Serving dashboard at {url}")
+    click.echo("Press Ctrl+C to stop.")
+    webbrowser.open(url)
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        click.echo("\nDashboard server stopped.")
+    finally:
+        server.server_close()
+
+
+def _sparkline(values: list, width: int = 0) -> str:
+    """Return a Unicode sparkline string for a list of numeric values.
+
+    Uses 8-level block characters (▁▂▃▄▅▆▇█).
+    If *width* > 0 and differs from len(values), the data is resampled
+    to fit the requested width.  width=0 means use len(values) as-is.
+    """
+    blocks = "▁▂▃▄▅▆▇█"
+
+    if not values:
+        return ""
+
+    # Resample to target width if needed
+    if width > 0 and width != len(values):
+        n = len(values)
+        resampled = []
+        for i in range(width):
+            # Map target index back to source range
+            src = i * (n - 1) / (width - 1) if width > 1 else 0
+            lo = int(src)
+            hi = min(lo + 1, n - 1)
+            frac = src - lo
+            resampled.append(values[lo] * (1 - frac) + values[hi] * frac)
+        values = resampled
+
+    lo = min(values)
+    hi = max(values)
+    span = hi - lo
+
+    chars = []
+    for v in values:
+        if span == 0:
+            idx = 3  # mid-level when all values are equal
+        else:
+            idx = int((v - lo) / span * 7)
+            idx = max(0, min(7, idx))
+        chars.append(blocks[idx])
+
+    return "".join(chars)
 
 
 def _format_tokens(value) -> str:
