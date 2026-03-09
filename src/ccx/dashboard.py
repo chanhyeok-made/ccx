@@ -76,11 +76,19 @@ def _parse_event_log(log_path: str) -> tuple[list[dict], list[dict]]:
 
 
 def _parse_iso(ts: str) -> datetime | None:
-    """Parse an ISO timestamp string, returning None on failure."""
+    """Parse an ISO timestamp string, returning None on failure.
+
+    Always returns a timezone-aware datetime (UTC) to avoid
+    offset-naive vs offset-aware comparison errors.
+    """
     if not ts:
         return None
     try:
-        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        from datetime import timezone
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
     except (ValueError, TypeError):
         return None
 
