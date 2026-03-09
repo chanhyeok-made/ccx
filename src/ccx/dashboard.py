@@ -4,6 +4,10 @@ Aggregates token usage, context window usage, event logs, and execution
 history, then renders a single-page HTML report with Chart.js
 visualizations and 3-level drill-down navigation.
 
+The primary axis is **execution history**: each user prompt submission
+marks the start of a new execution, and agents are grouped under their
+parent execution.
+
 Public API:
     aggregate_data(project_dir, limit=50) -> dict
     generate_html(project_dir, limit=50) -> str
@@ -23,7 +27,10 @@ from ccx.session import load_session
 # ---------------------------------------------------------------------------
 
 _LOG_DIR = ".ccx/logs"
-_TIMELINE_EVENTS = {"SubagentStart", "SubagentStop", "Stop", "SessionStart"}
+_TIMELINE_EVENTS = {
+    "SubagentStart", "SubagentStop", "Stop", "SessionStart",
+    "UserPromptSubmit",
+}
 _TOOL_EVENTS = {"PreToolUse"}
 
 
@@ -32,12 +39,10 @@ def _parse_event_log(log_path: str) -> tuple[list[dict], list[dict]]:
 
     Returns a tuple of (timeline_events, tool_events).
 
-    timeline_events: list of dicts with keys: hook_event_name, agent_id,
-        agent_type, timestamp.  Includes SubagentStart, SubagentStop,
-        Stop, and SessionStart events.
-
-    tool_events: list of dicts with keys: hook_event_name, tool_name,
-        timestamp.  Includes PreToolUse events.
+    timeline_events include SubagentStart, SubagentStop, Stop,
+    SessionStart, and UserPromptSubmit events.  SubagentStop events
+    carry ``last_assistant_message`` and ``stop_hook_active`` fields.
+    UserPromptSubmit events carry the ``prompt`` field.
     """
     timeline_events: list[dict] = []
     tool_events: list[dict] = []
@@ -57,12 +62,24 @@ def _parse_event_log(log_path: str) -> tuple[list[dict], list[dict]]:
                     continue
                 event_name = entry.get("hook_event_name", "")
                 if event_name in _TIMELINE_EVENTS:
-                    timeline_events.append({
+                    evt: dict = {
                         "hook_event_name": event_name,
                         "agent_id": entry.get("agent_id"),
                         "agent_type": entry.get("agent_type"),
                         "timestamp": entry.get("timestamp", ""),
-                    })
+                    }
+                    # SubagentStop extras
+                    if event_name == "SubagentStop":
+                        evt["last_assistant_message"] = entry.get(
+                            "last_assistant_message", ""
+                        )
+                        evt["stop_hook_active"] = entry.get(
+                            "stop_hook_active", False
+                        )
+                    # UserPromptSubmit extras
+                    if event_name == "UserPromptSubmit":
+                        evt["prompt"] = entry.get("prompt", "")
+                    timeline_events.append(evt)
                 elif event_name in _TOOL_EVENTS:
                     tool_events.append({
                         "hook_event_name": event_name,
@@ -93,65 +110,167 @@ def _parse_iso(ts: str) -> datetime | None:
         return None
 
 
-def _build_agent_timeline(events: list[dict]) -> list[dict]:
-    """Match SubagentStart/Stop pairs into an agent timeline.
+# ---------------------------------------------------------------------------
+# Execution splitting
+# ---------------------------------------------------------------------------
 
-    Returns a list of dicts sorted by start_time:
-        {agent_id, agent_type, start_time, end_time, duration_ms, order}
+def _split_executions(events: list[dict]) -> list[dict]:
+    """Split timeline events into execution units bounded by UserPromptSubmit.
 
-    Handles the case where SubagentStop events outnumber SubagentStart
-    events by matching only the first Stop per Start (keyed by agent_id).
+    Each execution is a dict:
+        {prompt, start_time, end_time, agents: [
+            {agent_id, agent_type, start_time, end_time, duration_ms,
+             order, message}
+        ]}
+
+    Dedup logic for SubagentStop: when the same agent_id has two stop
+    events (stop_hook_active=false and true), prefer the one with
+    stop_hook_active=false for ``message`` extraction (richer output).
     """
-    # Collect starts
-    starts: dict[str, dict] = {}
-    for evt in events:
-        if evt["hook_event_name"] == "SubagentStart" and evt.get("agent_id"):
-            aid = evt["agent_id"]
-            if aid not in starts:
-                starts[aid] = evt
+    # Collect execution boundaries
+    exec_boundaries: list[int] = []
+    for i, evt in enumerate(events):
+        if evt["hook_event_name"] == "UserPromptSubmit":
+            exec_boundaries.append(i)
 
-    # Match with first stop per agent_id
-    matched_stops: set[str] = set()
-    timeline: list[dict] = []
+    # If no UserPromptSubmit found, treat all events as a single execution
+    if not exec_boundaries:
+        if not events:
+            return []
+        exec_boundaries = [0]
 
-    for evt in events:
-        if evt["hook_event_name"] == "SubagentStop" and evt.get("agent_id"):
-            aid = evt["agent_id"]
-            if aid in starts and aid not in matched_stops:
-                matched_stops.add(aid)
-                start_evt = starts[aid]
-                start_dt = _parse_iso(start_evt["timestamp"])
-                end_dt = _parse_iso(evt["timestamp"])
+    executions: list[dict] = []
 
-                duration_ms = 0
-                if start_dt and end_dt:
-                    duration_ms = int((end_dt - start_dt).total_seconds() * 1000)
+    for bi, boundary_idx in enumerate(exec_boundaries):
+        boundary_evt = events[boundary_idx]
 
-                timeline.append({
-                    "agent_id": aid,
-                    "agent_type": start_evt.get("agent_type", "unknown"),
-                    "start_time": start_evt["timestamp"],
-                    "end_time": evt["timestamp"],
-                    "duration_ms": duration_ms,
-                })
+        # Determine event range for this execution
+        next_boundary = (
+            exec_boundaries[bi + 1] if bi + 1 < len(exec_boundaries)
+            else len(events)
+        )
+        exec_events = events[boundary_idx:next_boundary]
 
-    # Also add unmatched starts (still running or no stop event)
-    for aid, start_evt in starts.items():
-        if aid not in matched_stops:
-            timeline.append({
+        prompt = boundary_evt.get("prompt", "") if boundary_evt[
+            "hook_event_name"
+        ] == "UserPromptSubmit" else ""
+        exec_start = boundary_evt.get("timestamp", "")
+
+        # Collect starts and stops within this execution
+        starts: dict[str, dict] = {}
+        # stops: agent_id -> list of stop events (for dedup)
+        stops: dict[str, list[dict]] = {}
+
+        for evt in exec_events:
+            ename = evt["hook_event_name"]
+            aid = evt.get("agent_id")
+            if not aid:
+                continue
+            if ename == "SubagentStart":
+                if aid not in starts:
+                    starts[aid] = evt
+            elif ename == "SubagentStop":
+                stops.setdefault(aid, []).append(evt)
+
+        # Build agents list
+        agents: list[dict] = []
+        exec_end = exec_start
+
+        for aid, start_evt in starts.items():
+            stop_list = stops.get(aid, [])
+
+            # Pick the best stop event for timing (first stop by timestamp)
+            best_stop: dict | None = None
+            if stop_list:
+                stop_list_sorted = sorted(
+                    stop_list, key=lambda e: e.get("timestamp", "")
+                )
+                best_stop = stop_list_sorted[0]
+
+            # Pick message: prefer stop_hook_active=false (richer)
+            message = ""
+            inactive_stops = [
+                s for s in stop_list if not s.get("stop_hook_active", True)
+            ]
+            active_stops = [
+                s for s in stop_list if s.get("stop_hook_active", False)
+            ]
+            if inactive_stops:
+                message = inactive_stops[0].get("last_assistant_message", "")
+            elif active_stops:
+                message = active_stops[0].get("last_assistant_message", "")
+
+            start_ts = start_evt.get("timestamp", "")
+            end_ts = best_stop.get("timestamp", "") if best_stop else ""
+
+            start_dt = _parse_iso(start_ts)
+            end_dt = _parse_iso(end_ts)
+
+            duration_ms = 0
+            if start_dt and end_dt:
+                duration_ms = int(
+                    (end_dt - start_dt).total_seconds() * 1000
+                )
+
+            # Track execution end time
+            if end_ts and end_ts > exec_end:
+                exec_end = end_ts
+
+            agents.append({
                 "agent_id": aid,
                 "agent_type": start_evt.get("agent_type", "unknown"),
-                "start_time": start_evt["timestamp"],
-                "end_time": None,
-                "duration_ms": 0,
+                "start_time": start_ts,
+                "end_time": end_ts or None,
+                "duration_ms": duration_ms,
+                "order": 0,
+                "message": message or "",
             })
 
-    # Sort by start_time chronologically, assign order
-    timeline.sort(key=lambda x: x.get("start_time", ""))
-    for i, entry in enumerate(timeline):
-        entry["order"] = i + 1
+        # Also handle stops without matching starts (orphan stops)
+        for aid, stop_list in stops.items():
+            if aid in starts:
+                continue
+            # Still extract message
+            inactive_stops = [
+                s for s in stop_list if not s.get("stop_hook_active", True)
+            ]
+            active_stops = [
+                s for s in stop_list if s.get("stop_hook_active", False)
+            ]
+            best_stop = stop_list[0]
+            message = ""
+            if inactive_stops:
+                message = inactive_stops[0].get("last_assistant_message", "")
+            elif active_stops:
+                message = active_stops[0].get("last_assistant_message", "")
 
-    return timeline
+            end_ts = best_stop.get("timestamp", "")
+            if end_ts and end_ts > exec_end:
+                exec_end = end_ts
+
+            agents.append({
+                "agent_id": aid,
+                "agent_type": best_stop.get("agent_type", "unknown"),
+                "start_time": None,
+                "end_time": end_ts or None,
+                "duration_ms": 0,
+                "order": 0,
+                "message": message or "",
+            })
+
+        # Sort agents by start_time, assign order
+        agents.sort(key=lambda a: a.get("start_time") or "")
+        for i, agent in enumerate(agents):
+            agent["order"] = i + 1
+
+        executions.append({
+            "prompt": prompt,
+            "start_time": exec_start,
+            "end_time": exec_end if exec_end != exec_start else "",
+            "agents": agents,
+        })
+
+    return executions
 
 
 # ---------------------------------------------------------------------------
@@ -159,14 +278,14 @@ def _build_agent_timeline(events: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def aggregate_data(project_dir: str, limit: int = 50) -> dict:
-    """Collect all dashboard data from token, context, event log, and session
-    sources.
+    """Collect all dashboard data centred on execution history.
 
     Returns a dict with keys:
-        token    - session list + per-session agent details
-        context  - session list + per-session agent details
-        history  - execution records
-        sessions - merged per-session data for drill-down
+        executions - list of execution dicts (primary axis)
+        token      - session list + per-session agent details
+        context    - session list
+        history    - session.json execution records
+        overview   - chart-level aggregate data
     """
     # --- Token usage ---
     token_list = list_session_usages(project_dir, limit=limit)
@@ -199,25 +318,69 @@ def aggregate_data(project_dir: str, limit: int = 50) -> dict:
         if detail.get("status") == "ok":
             context_details[sid] = detail
 
-    # --- Event logs → timelines + tool usage ---
+    # --- Event logs -> executions + tool usage ---
     log_dir = Path(project_dir) / _LOG_DIR
-    timelines: dict[str, list[dict]] = {}
-    session_starts: dict[str, str] = {}  # session_id -> model
-    session_tool_usage: dict[str, dict[str, int]] = {}  # session_id -> {tool_name: count}
-    session_time_ranges: dict[str, tuple[str, str]] = {}  # session_id -> (first_ts, last_ts)
+    all_executions: list[dict] = []
+    session_tool_usage: dict[str, dict[str, int]] = {}
+    session_time_ranges: dict[str, tuple[str, str]] = {}
+
     if log_dir.exists():
         for fp in log_dir.glob("*.jsonl"):
             sid = fp.stem
             if sid in ("hook_errors", "schema_violations"):
                 continue
             events, tool_events = _parse_event_log(str(fp))
-            timeline = _build_agent_timeline(events)
-            if timeline:
-                timelines[sid] = timeline
-            # Extract SessionStart model info
-            for evt in events:
-                if evt["hook_event_name"] == "SessionStart":
-                    session_starts[sid] = evt.get("timestamp", "")
+
+            # Split into executions
+            execs = _split_executions(events)
+            for ex in execs:
+                ex["session_id"] = sid
+                # Enrich agents with token/context data
+                # Build lookup maps by prefixed agent_id
+                token_agents: dict[str, dict] = {}
+                if sid in token_details:
+                    for a in token_details[sid].get("agents", []):
+                        token_agents[a.get("agent_id", "")] = a
+                context_agents: dict[str, dict] = {}
+                if sid in context_details:
+                    for a in context_details[sid].get("agents", []):
+                        context_agents[a.get("agent_id", "")] = a
+
+                exec_total_tokens = 0
+                exec_max_context = 0
+                for agent in ex["agents"]:
+                    raw_aid = agent["agent_id"]
+                    prefixed_aid = f"agent-{raw_aid}"
+
+                    ta = token_agents.get(prefixed_aid, {})
+                    ca = context_agents.get(prefixed_aid, {})
+
+                    agent["agent_id_short"] = raw_aid[:8]
+                    agent["total_tokens"] = ta.get("total_tokens", 0)
+                    agent["input_tokens"] = ta.get("input_tokens", 0)
+                    agent["cache_creation_input_tokens"] = ta.get(
+                        "cache_creation_input_tokens", 0
+                    )
+                    agent["cache_read_input_tokens"] = ta.get(
+                        "cache_read_input_tokens", 0
+                    )
+                    agent["output_tokens"] = ta.get("output_tokens", 0)
+                    agent["turn_count"] = ta.get("turn_count", 0)
+                    agent["max_context_fill"] = ca.get("max_context_fill", 0)
+                    agent["compaction_count"] = ca.get("compaction_count", 0)
+                    agent["turns"] = ca.get("turns", [])
+                    agent["compaction_points"] = ca.get(
+                        "compaction_points", []
+                    )
+
+                    exec_total_tokens += agent["total_tokens"]
+                    if agent["max_context_fill"] > exec_max_context:
+                        exec_max_context = agent["max_context_fill"]
+
+                ex["total_tokens"] = exec_total_tokens
+                ex["max_context_fill"] = exec_max_context
+
+            all_executions.extend(execs)
 
             # Tool usage aggregation per session
             if tool_events:
@@ -227,7 +390,7 @@ def aggregate_data(project_dir: str, limit: int = 50) -> dict:
                     tool_counts[tn] = tool_counts.get(tn, 0) + 1
                 session_tool_usage[sid] = tool_counts
 
-            # Compute session time range from all events (timeline + tool)
+            # Session time range
             all_timestamps: list[str] = []
             for evt in events:
                 ts = evt.get("timestamp", "")
@@ -239,164 +402,43 @@ def aggregate_data(project_dir: str, limit: int = 50) -> dict:
                     all_timestamps.append(ts)
             if all_timestamps:
                 all_timestamps.sort()
-                session_time_ranges[sid] = (all_timestamps[0], all_timestamps[-1])
+                session_time_ranges[sid] = (
+                    all_timestamps[0],
+                    all_timestamps[-1],
+                )
 
-    # --- Execution history ---
+    # --- Match session.json execution records to executions ---
     history = load_session(project_dir, limit=limit)
+    if history:
+        for rec in history:
+            rec_ts = rec.get("timestamp", "")
+            rec_dt = _parse_iso(rec_ts)
+            if not rec_dt:
+                continue
+            # Find the execution whose time window covers this record
+            for ex in all_executions:
+                ex_start = _parse_iso(ex.get("start_time", ""))
+                ex_end = _parse_iso(ex.get("end_time", ""))
+                if not ex_start:
+                    continue
+                # Use a generous window: execution start to end (or +10min)
+                if ex_end is None or ex_end <= ex_start:
+                    from datetime import timedelta
+                    ex_end = ex_start + timedelta(minutes=10)
+                if ex_start <= rec_dt <= ex_end:
+                    ex["changes"] = rec.get("changes", [])
+                    ex["success"] = rec.get("success", False)
+                    ex["summary"] = rec.get("summary", "")
+                    ex["error"] = rec.get("error", "")
+                    break
 
-    # --- Merge per-session data for drill-down ---
-    all_session_ids: set[str] = set()
-    for s in token_sessions:
-        all_session_ids.add(s.get("session_id", ""))
-    for s in context_sessions:
-        all_session_ids.add(s.get("session_id", ""))
-    for sid in timelines:
-        all_session_ids.add(sid)
-
-    sessions_merged: list[dict] = []
-    for sid in all_session_ids:
-        if not sid:
-            continue
-
-        # Token summary
-        token_summary = {}
-        for ts in token_sessions:
-            if ts.get("session_id") == sid:
-                token_summary = ts
-                break
-
-        # Context summary
-        context_summary = {}
-        for cs in context_sessions:
-            if cs.get("session_id") == sid:
-                context_summary = cs
-                break
-
-        timestamp = (
-            token_summary.get("timestamp")
-            or context_summary.get("timestamp")
-            or session_starts.get(sid, "")
-        )
-
-        # Build agent details by merging token + context + timeline
-        # Use the prefixed agent_id mapping: 'agent-' + event_log_agent_id
-        timeline = timelines.get(sid, [])
-
-        # Token agent details indexed by agent_id
-        token_agents: dict[str, dict] = {}
-        if sid in token_details:
-            for a in token_details[sid].get("agents", []):
-                token_agents[a.get("agent_id", "")] = a
-
-        # Context agent details indexed by agent_id
-        context_agents: dict[str, dict] = {}
-        if sid in context_details:
-            for a in context_details[sid].get("agents", []):
-                context_agents[a.get("agent_id", "")] = a
-
-        # Build merged agent list
-        agents_merged: list[dict] = []
-
-        # Start with timeline agents (they have timing info)
-        seen_agent_ids: set[str] = set()
-        for tl_entry in timeline:
-            raw_aid = tl_entry["agent_id"]
-            prefixed_aid = f"agent-{raw_aid}"
-            seen_agent_ids.add(prefixed_aid)
-
-            token_agent = token_agents.get(prefixed_aid, {})
-            context_agent = context_agents.get(prefixed_aid, {})
-
-            agents_merged.append({
-                "agent_id": prefixed_aid,
-                "agent_id_short": raw_aid[:8],
-                "agent_type": tl_entry.get("agent_type", token_agent.get("agent_type", "unknown")),
-                "start_time": tl_entry.get("start_time"),
-                "end_time": tl_entry.get("end_time"),
-                "duration_ms": tl_entry.get("duration_ms", 0),
-                "order": tl_entry.get("order", 0),
-                "total_tokens": token_agent.get("total_tokens", 0),
-                "input_tokens": token_agent.get("input_tokens", 0),
-                "cache_creation_input_tokens": token_agent.get("cache_creation_input_tokens", 0),
-                "cache_read_input_tokens": token_agent.get("cache_read_input_tokens", 0),
-                "output_tokens": token_agent.get("output_tokens", 0),
-                "turn_count": token_agent.get("turn_count", 0),
-                "max_context_fill": context_agent.get("max_context_fill", 0),
-                "compaction_count": context_agent.get("compaction_count", 0),
-                "turns": context_agent.get("turns", []),
-                "compaction_points": context_agent.get("compaction_points", []),
-            })
-
-        # Add agents from token/context data not in timeline (e.g. main)
-        for aid, ta in token_agents.items():
-            if aid not in seen_agent_ids:
-                seen_agent_ids.add(aid)
-                context_agent = context_agents.get(aid, {})
-                agents_merged.append({
-                    "agent_id": aid,
-                    "agent_id_short": aid[:8] if aid != "main" else "main",
-                    "agent_type": ta.get("agent_type", "unknown"),
-                    "start_time": None,
-                    "end_time": None,
-                    "duration_ms": 0,
-                    "order": 0,
-                    "total_tokens": ta.get("total_tokens", 0),
-                    "input_tokens": ta.get("input_tokens", 0),
-                    "cache_creation_input_tokens": ta.get("cache_creation_input_tokens", 0),
-                    "cache_read_input_tokens": ta.get("cache_read_input_tokens", 0),
-                    "output_tokens": ta.get("output_tokens", 0),
-                    "turn_count": ta.get("turn_count", 0),
-                    "max_context_fill": context_agent.get("max_context_fill", 0),
-                    "compaction_count": context_agent.get("compaction_count", 0),
-                    "turns": context_agent.get("turns", []),
-                    "compaction_points": context_agent.get("compaction_points", []),
-                })
-
-        for aid, ca in context_agents.items():
-            if aid not in seen_agent_ids:
-                seen_agent_ids.add(aid)
-                agents_merged.append({
-                    "agent_id": aid,
-                    "agent_id_short": aid[:8] if aid != "main" else "main",
-                    "agent_type": ca.get("agent_type", "unknown"),
-                    "start_time": None,
-                    "end_time": None,
-                    "duration_ms": 0,
-                    "order": 0,
-                    "total_tokens": 0,
-                    "input_tokens": 0,
-                    "cache_creation_input_tokens": 0,
-                    "cache_read_input_tokens": 0,
-                    "output_tokens": 0,
-                    "turn_count": 0,
-                    "max_context_fill": ca.get("max_context_fill", 0),
-                    "compaction_count": ca.get("compaction_count", 0),
-                    "turns": ca.get("turns", []),
-                    "compaction_points": ca.get("compaction_points", []),
-                })
-
-        sessions_merged.append({
-            "session_id": sid,
-            "timestamp": timestamp,
-            "total_tokens": token_summary.get("total_tokens", 0),
-            "total_input_tokens": token_summary.get("total_input_tokens", 0),
-            "total_cache_creation_input_tokens": token_summary.get("total_cache_creation_input_tokens", 0),
-            "total_cache_read_input_tokens": token_summary.get("total_cache_read_input_tokens", 0),
-            "total_output_tokens": token_summary.get("total_output_tokens", 0),
-            "total_max_context_fill": context_summary.get("total_max_context_fill", 0),
-            "avg_context_fill": context_summary.get("avg_context_fill", 0),
-            "agent_count": max(
-                token_summary.get("agent_count", 0),
-                context_summary.get("agent_count", 0),
-                len(agents_merged),
-            ),
-            "agents": agents_merged,
-        })
-
-    # Sort by timestamp descending
-    sessions_merged.sort(key=lambda s: s.get("timestamp", ""), reverse=True)
+    # Sort executions by start_time descending (newest first)
+    all_executions.sort(
+        key=lambda e: e.get("start_time", ""), reverse=True
+    )
 
     return {
+        "executions": all_executions,
         "token": {
             "sessions": token_sessions,
             "agent_type_totals": agent_type_totals,
@@ -405,7 +447,6 @@ def aggregate_data(project_dir: str, limit: int = 50) -> dict:
             "sessions": context_sessions,
         },
         "history": history,
-        "sessions": sessions_merged,
         "session_tool_usage": session_tool_usage,
         "session_time_ranges": session_time_ranges,
     }
@@ -443,9 +484,11 @@ def _escape_html(text: str) -> str:
 def generate_html(project_dir: str, limit: int = 50) -> str:
     """Generate a self-contained HTML dashboard page with 3-level drill-down.
 
-    Level 1 -- Session overview: session list table + aggregate charts.
-    Level 2 -- Session detail: agent timeline (Gantt), agent table.
-    Level 3 -- Agent detail: token breakdown, context fill per turn.
+    Level 1 -- Execution History: execution list + aggregate charts.
+    Level 2 -- Execution Detail: agent pipeline Gantt, agent table,
+               message previews, changes accordion.
+    Level 3 -- Agent Detail: token breakdown, context fill per turn,
+               full message panel.
 
     The returned string is a complete HTML document with inline CSS/JS
     and Chart.js loaded from CDN.  All data is injected as JSON literals
@@ -460,83 +503,32 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
     """
     data = aggregate_data(project_dir, limit=limit)
 
-    # --- Prepare chart data for Level 1 overview ---
+    # --- Prepare chart data for overview ---
     token_sessions = list(reversed(data["token"]["sessions"]))
-    token_labels = [_format_date(s.get("timestamp", "")) for s in token_sessions]
+    token_labels = [
+        _format_date(s.get("timestamp", "")) for s in token_sessions
+    ]
     token_input = [s.get("total_input_tokens", 0) for s in token_sessions]
-    token_cache_create = [s.get("total_cache_creation_input_tokens", 0) for s in token_sessions]
-    token_cache_read = [s.get("total_cache_read_input_tokens", 0) for s in token_sessions]
+    token_cache_create = [
+        s.get("total_cache_creation_input_tokens", 0) for s in token_sessions
+    ]
+    token_cache_read = [
+        s.get("total_cache_read_input_tokens", 0) for s in token_sessions
+    ]
     token_output = [s.get("total_output_tokens", 0) for s in token_sessions]
 
-    agent_totals = data["token"]["agent_type_totals"]
-
     context_sessions = list(reversed(data["context"]["sessions"]))
-    context_labels = [_format_date(s.get("timestamp", "")) for s in context_sessions]
-    context_max_fills = [s.get("total_max_context_fill", 0) for s in context_sessions]
+    context_labels = [
+        _format_date(s.get("timestamp", "")) for s in context_sessions
+    ]
+    context_max_fills = [
+        s.get("total_max_context_fill", 0) for s in context_sessions
+    ]
 
-    # Execution history rows (for Level 1) — enriched with session matching
-    history = data["history"]
-    session_tool_usage = data.get("session_tool_usage", {})
-    session_time_ranges = data.get("session_time_ranges", {})
-    sessions_data_for_match = data["sessions"]
-
-    # Build lookup: session_id -> session summary (tokens, context)
-    session_summary_map: dict[str, dict] = {}
-    for sm in sessions_data_for_match:
-        session_summary_map[sm["session_id"]] = sm
-
-    history_rows: list[dict] = []
-    if history:
-        for rec in reversed(history):
-            rec_ts = rec.get("timestamp", "")
-            changes = rec.get("changes", [])
-
-            # Session matching: find session whose time range covers this record
-            matched_session_id: str | None = None
-            if rec_ts:
-                rec_dt = _parse_iso(rec_ts)
-                if rec_dt:
-                    for sid, (range_start, range_end) in session_time_ranges.items():
-                        start_dt = _parse_iso(range_start)
-                        end_dt = _parse_iso(range_end)
-                        if start_dt and end_dt and start_dt <= rec_dt <= end_dt:
-                            matched_session_id = sid
-                            break
-
-            # Tool usage from matched session
-            tool_usage: dict[str, int] = {}
-            if matched_session_id and matched_session_id in session_tool_usage:
-                tool_usage = session_tool_usage[matched_session_id]
-
-            # Token/context summary from matched session
-            session_tokens = 0
-            session_max_context = 0
-            if matched_session_id and matched_session_id in session_summary_map:
-                sm = session_summary_map[matched_session_id]
-                session_tokens = sm.get("total_tokens", 0)
-                session_max_context = sm.get("total_max_context_fill", 0)
-
-            history_rows.append({
-                "timestamp": _format_date(rec_ts),
-                "request": rec.get("request", "")[:120],
-                "success": rec.get("success", False),
-                "summary": rec.get("summary", rec.get("error", ""))[:200],
-                "changes_count": len(changes),
-                "changes": changes,
-                "error": rec.get("error", ""),
-                "matched_session_id": matched_session_id,
-                "tool_usage": tool_usage,
-                "session_tokens": session_tokens,
-                "session_max_context": session_max_context,
-            })
-
-    # --- Sessions data for drill-down ---
-    sessions_data = data["sessions"]
-
-    # Agent type color map for consistent coloring
+    # Collect all agent types for consistent palette
     all_agent_types: list[str] = []
-    for s in sessions_data:
-        for a in s.get("agents", []):
+    for ex in data["executions"]:
+        for a in ex.get("agents", []):
             at = a.get("agent_type", "unknown")
             if at not in all_agent_types:
                 all_agent_types.append(at)
@@ -549,13 +541,10 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
             "token_cache_create": token_cache_create,
             "token_cache_read": token_cache_read,
             "token_output": token_output,
-            "donut_labels": list(agent_totals.keys()),
-            "donut_values": list(agent_totals.values()),
             "context_labels": context_labels,
             "context_max_fills": context_max_fills,
-            "history": history_rows,
         },
-        "sessions": sessions_data,
+        "executions": data["executions"],
         "agent_types": all_agent_types,
     }
 
@@ -751,11 +740,11 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
     margin-left: 6px;
   }}
 
-  /* Accordion for execution history */
+  /* Accordion for changes */
   .accordion-row {{ cursor: pointer; }}
   .accordion-row:hover {{ background: #1e2f50; }}
   .accordion-row td:first-child::before {{
-    content: '\u25B6';
+    content: '\\25B6';
     display: inline-block;
     margin-right: 6px;
     font-size: 0.65rem;
@@ -806,31 +795,6 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
     margin-top: 8px;
     font-size: 0.8rem;
   }}
-  .session-link {{
-    color: #4fc3f7;
-    cursor: pointer;
-    text-decoration: none;
-    font-size: 0.8rem;
-  }}
-  .session-link:hover {{ text-decoration: underline; }}
-  .tool-list {{
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }}
-  .tool-chip {{
-    display: inline-block;
-    background: #1e2f50;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    color: #ccc;
-  }}
-  .tool-chip .tool-count {{
-    color: #4fc3f7;
-    font-weight: 600;
-    margin-left: 4px;
-  }}
   .meta-row {{
     display: flex;
     gap: 20px;
@@ -840,6 +804,131 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
   }}
   .meta-row span {{ display: inline-flex; align-items: center; gap: 4px; }}
   .meta-row .label {{ color: #90caf9; }}
+
+  /* Agent card styles */
+  .pipeline-flow {{
+    display: flex;
+    gap: 12px;
+    overflow-x: auto;
+    padding: 10px 0;
+    align-items: flex-start;
+  }}
+  .agent-card {{
+    background: #1a1a2e;
+    border-radius: 10px;
+    padding: 14px;
+    min-width: 220px;
+    max-width: 280px;
+    flex-shrink: 0;
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.15s;
+    border: 1px solid #2a2a4a;
+  }}
+  .agent-card:hover {{
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(0,0,0,0.4);
+  }}
+  .agent-card .card-header {{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+  }}
+  .agent-card .card-header .type-name {{
+    font-weight: 600;
+    font-size: 0.85rem;
+  }}
+  .agent-card .card-header .order-badge {{
+    font-size: 0.7rem;
+    background: #2a2a4a;
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: #90caf9;
+  }}
+  .agent-card .card-stats {{
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    font-size: 0.75rem;
+    color: #aaa;
+    margin-bottom: 8px;
+  }}
+  .agent-card .card-stats .stat-val {{
+    color: #e0e0e0;
+    font-weight: 600;
+  }}
+  .agent-card .card-connector {{
+    text-align: center;
+    color: #4fc3f7;
+    font-size: 1.2rem;
+    flex-shrink: 0;
+    align-self: center;
+  }}
+  .message-preview {{
+    font-size: 0.75rem;
+    color: #888;
+    margin-top: 6px;
+    max-height: 3.6em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    cursor: pointer;
+    border-top: 1px solid #2a2a4a;
+    padding-top: 6px;
+  }}
+  .message-preview:hover {{ color: #bbb; }}
+
+  /* Full message panel (Level 3) */
+  .message-full {{
+    background: #0d1525;
+    border-radius: 8px;
+    padding: 16px;
+    max-height: 500px;
+    overflow-y: auto;
+    margin-top: 10px;
+  }}
+  .message-content {{
+    white-space: pre-wrap;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.8rem;
+    color: #ccc;
+    line-height: 1.6;
+    word-break: break-word;
+  }}
+
+  /* Exec summary header */
+  .exec-summary {{
+    display: flex;
+    gap: 24px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+  }}
+  .exec-summary .prompt-text {{
+    font-size: 0.95rem;
+    color: #e0e0e0;
+    flex: 1;
+    min-width: 200px;
+  }}
+  .exec-summary .stat-pills {{
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }}
+  .stat-pill {{
+    background: #1a1a2e;
+    padding: 4px 12px;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    color: #aaa;
+  }}
+  .stat-pill .pill-val {{
+    color: #4fc3f7;
+    font-weight: 600;
+    margin-left: 4px;
+  }}
 </style>
 </head>
 <body>
@@ -848,33 +937,16 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
   <div class="breadcrumb" id="breadcrumb"></div>
 </div>
 
-<!-- Level 1: Overview -->
-<div class="view active" id="view-overview">
+<!-- Level 1: Execution History -->
+<div class="view active" id="view-executions">
   <div class="grid">
     <div class="card">
-      <h2>Token Usage per Session</h2>
+      <h2>Token Usage Trend</h2>
       <div id="tokenBarWrap"><canvas id="tokenBar"></canvas></div>
     </div>
     <div class="card">
-      <h2>Context Max Fill per Session</h2>
+      <h2>Context Fill Trend</h2>
       <div id="contextBarWrap"><canvas id="contextBar"></canvas></div>
-    </div>
-    <div class="card full">
-      <h2>Sessions</h2>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Session ID</th>
-              <th>Timestamp</th>
-              <th>Total Tokens</th>
-              <th>Max Context Fill</th>
-              <th>Agents</th>
-            </tr>
-          </thead>
-          <tbody id="session-table-body"></tbody>
-        </table>
-      </div>
     </div>
     <div class="card full">
       <h2>Execution History</h2>
@@ -883,22 +955,29 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
           <thead>
             <tr>
               <th>Timestamp</th>
-              <th>Request</th>
+              <th>Prompt</th>
+              <th>Agents</th>
+              <th>Total Tokens</th>
               <th>Status</th>
-              <th>Summary</th>
               <th>Changes</th>
             </tr>
           </thead>
-          <tbody id="history-table-body"></tbody>
+          <tbody id="exec-table-body"></tbody>
         </table>
       </div>
     </div>
   </div>
 </div>
 
-<!-- Level 2: Session Detail -->
-<div class="view" id="view-session">
+<!-- Level 2: Execution Detail -->
+<div class="view" id="view-exec-detail">
   <div class="grid">
+    <div class="card full" id="exec-summary-card">
+    </div>
+    <div class="card full">
+      <h2>Agent Pipeline</h2>
+      <div id="pipeline-container" class="pipeline-flow"></div>
+    </div>
     <div class="card full">
       <h2>Agent Timeline</h2>
       <div id="gantt-container" class="gantt-container"></div>
@@ -912,7 +991,6 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
               <th>#</th>
               <th>Agent Type</th>
               <th>Agent ID</th>
-              <th>Start</th>
               <th>Duration</th>
               <th>Tokens</th>
               <th>Max Context</th>
@@ -923,13 +1001,20 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
         </table>
       </div>
     </div>
-    <div class="card">
-      <h2>Session Token Breakdown</h2>
-      <div id="sessionDonutWrap"><canvas id="sessionDonut"></canvas></div>
-    </div>
-    <div class="card">
-      <h2>Agent Type Token Distribution</h2>
-      <div id="sessionTypeBarWrap"><canvas id="sessionTypeBar"></canvas></div>
+    <div class="card full" id="changes-card" style="display:none">
+      <h2>Changes</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Path</th>
+              <th>Type</th>
+              <th>Intent</th>
+            </tr>
+          </thead>
+          <tbody id="changes-table-body"></tbody>
+        </table>
+      </div>
     </div>
   </div>
 </div>
@@ -948,6 +1033,12 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
     <div class="card full">
       <h2>Context Fill per Turn</h2>
       <div id="agentContextWrap"><canvas id="agentContextChart"></canvas></div>
+    </div>
+    <div class="card full" id="message-card">
+      <h2>Agent Output</h2>
+      <div id="agent-message" class="message-full">
+        <div class="message-content" id="agent-message-content"></div>
+      </div>
     </div>
     <div class="card full">
       <h2>Turn Details</h2>
@@ -979,7 +1070,7 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
   // -----------------------------------------------------------------------
   // State
   // -----------------------------------------------------------------------
-  const state = {{ level: 1, sessionId: null, agentId: null }};
+  const state = {{ level: 1, execIdx: null, agentIdx: null }};
   const charts = [];
 
   // -----------------------------------------------------------------------
@@ -1027,9 +1118,26 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
     }} catch(e) {{ return iso.slice(11, 19); }}
   }}
 
+  function fmtDate(iso) {{
+    if (!iso) return '?';
+    try {{
+      const d = new Date(iso);
+      const mo = String(d.getMonth() + 1).padStart(2, '0');
+      const da = String(d.getDate()).padStart(2, '0');
+      const hh = String(d.getHours()).padStart(2, '0');
+      const mm = String(d.getMinutes()).padStart(2, '0');
+      return mo + '/' + da + ' ' + hh + ':' + mm;
+    }} catch(e) {{ return iso.slice(0, 16); }}
+  }}
+
   function escapeHtml(t) {{
     if (!t) return '';
     return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }}
+
+  function truncate(s, n) {{
+    if (!s) return '';
+    return s.length > n ? s.slice(0, n) + '...' : s;
   }}
 
   function destroyCharts() {{
@@ -1039,37 +1147,26 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
     }}
   }}
 
-  function getSession(sid) {{
-    return (D.sessions || []).find(s => s.session_id === sid);
-  }}
-
-  function getAgent(sid, aid) {{
-    const sess = getSession(sid);
-    if (!sess) return null;
-    return (sess.agents || []).find(a => a.agent_id === aid);
-  }}
-
   // -----------------------------------------------------------------------
   // Navigation
   // -----------------------------------------------------------------------
-  function navigate(level, sessionId, agentId) {{
+  function navigate(level, execIdx, agentIdx) {{
     state.level = level;
-    state.sessionId = sessionId || null;
-    state.agentId = agentId || null;
+    state.execIdx = execIdx != null ? execIdx : null;
+    state.agentIdx = agentIdx != null ? agentIdx : null;
 
     destroyCharts();
-
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
 
     if (level === 1) {{
-      document.getElementById('view-overview').classList.add('active');
-      renderOverview();
+      document.getElementById('view-executions').classList.add('active');
+      renderExecutions();
     }} else if (level === 2) {{
-      document.getElementById('view-session').classList.add('active');
-      renderSessionDetail(sessionId);
+      document.getElementById('view-exec-detail').classList.add('active');
+      renderExecutionDetail(execIdx);
     }} else if (level === 3) {{
       document.getElementById('view-agent').classList.add('active');
-      renderAgentDetail(sessionId, agentId);
+      renderAgentDetail(execIdx, agentIdx);
     }}
 
     updateBreadcrumb();
@@ -1078,19 +1175,25 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
   function updateBreadcrumb() {{
     const bc = document.getElementById('breadcrumb');
     let html = '';
+    const execs = D.executions || [];
 
     if (state.level === 1) {{
-      html = '<span class="current">Overview</span>';
+      html = '<span class="current">Execution History</span>';
     }} else if (state.level === 2) {{
-      html = '<a onclick="window._nav(1)">Overview</a>'
+      const ex = execs[state.execIdx];
+      const label = ex ? truncate(ex.prompt || fmtDate(ex.start_time), 40) : 'Execution';
+      html = '<a onclick="window._nav(1)">Execution History</a>'
            + '<span class="sep">/</span>'
-           + '<span class="current">' + escapeHtml(state.sessionId.slice(0,8)) + '...</span>';
+           + '<span class="current">' + escapeHtml(label) + '</span>';
     }} else if (state.level === 3) {{
-      const agent = getAgent(state.sessionId, state.agentId);
-      const aLabel = agent ? (agent.agent_type + ' (' + agent.agent_id_short + ')') : state.agentId;
-      html = '<a onclick="window._nav(1)">Overview</a>'
+      const ex = execs[state.execIdx];
+      const exLabel = ex ? truncate(ex.prompt || fmtDate(ex.start_time), 30) : 'Execution';
+      const agents = ex ? (ex.agents || []) : [];
+      const agent = agents[state.agentIdx];
+      const aLabel = agent ? (agent.agent_type + ' (' + agent.agent_id_short + ')') : 'Agent';
+      html = '<a onclick="window._nav(1)">Execution History</a>'
            + '<span class="sep">/</span>'
-           + '<a onclick="window._nav(2,\\'' + state.sessionId + '\\')">' + escapeHtml(state.sessionId.slice(0,8)) + '...</a>'
+           + '<a onclick="window._nav(2,' + state.execIdx + ')">' + escapeHtml(exLabel) + '</a>'
            + '<span class="sep">/</span>'
            + '<span class="current">' + escapeHtml(aLabel) + '</span>';
     }}
@@ -1098,122 +1201,39 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
     bc.innerHTML = html;
   }}
 
-  window._nav = function(level, sid, aid) {{
-    navigate(level, sid, aid);
-  }};
-
-  window._toggleHistory = function(idx) {{
-    const row = document.getElementById('hrow-' + idx);
-    const panel = document.getElementById('hpanel-' + idx);
-    if (row && panel) {{
-      row.classList.toggle('open');
-      panel.classList.toggle('open');
-    }}
+  window._nav = function(level, a, b) {{
+    navigate(level, a, b);
   }};
 
   // -----------------------------------------------------------------------
-  // Level 1: Overview
+  // Level 1: Execution History
   // -----------------------------------------------------------------------
-  function renderOverview() {{
+  function renderExecutions() {{
     const ov = D.overview;
+    const execs = D.executions || [];
 
-    // Session table
-    const tbody = document.getElementById('session-table-body');
-    const sessions = D.sessions || [];
-    if (sessions.length === 0) {{
-      tbody.innerHTML = '<tr><td colspan="5" class="empty">No session data</td></tr>';
+    // Execution table
+    const tbody = document.getElementById('exec-table-body');
+    if (execs.length === 0) {{
+      tbody.innerHTML = '<tr><td colspan="6" class="empty">No execution data</td></tr>';
     }} else {{
-      tbody.innerHTML = sessions.map(s => {{
-        const sid = s.session_id;
-        return '<tr class="clickable" onclick="window._nav(2,\\'' + sid + '\\')">'
-          + '<td><code>' + escapeHtml(sid.slice(0,8)) + '...</code></td>'
-          + '<td>' + escapeHtml(fmtTime(s.timestamp) || '?') + '</td>'
-          + '<td class="num">' + fmtNum(s.total_tokens) + '</td>'
-          + '<td class="num">' + fmtNum(s.total_max_context_fill) + '</td>'
-          + '<td>' + (s.agent_count || 0) + '</td>'
-          + '</tr>';
-      }}).join('');
-    }}
+      tbody.innerHTML = execs.map((ex, idx) => {{
+        const agentCount = (ex.agents || []).length;
+        const totalTokens = ex.total_tokens || 0;
+        const changesCount = (ex.changes || []).length;
+        const hasStatus = 'success' in ex;
+        const badge = hasStatus
+          ? (ex.success ? '<span class="badge success">OK</span>' : '<span class="badge fail">FAIL</span>')
+          : '<span style="color:#666">-</span>';
 
-    // History table (accordion)
-    const htbody = document.getElementById('history-table-body');
-    if (!ov.history || ov.history.length === 0) {{
-      htbody.innerHTML = '<tr><td colspan="5" class="empty">No execution history</td></tr>';
-    }} else {{
-      htbody.innerHTML = ov.history.map((r, idx) => {{
-        const badge = r.success
-          ? '<span class="badge success">OK</span>'
-          : '<span class="badge fail">FAIL</span>';
-
-        // Main row (clickable accordion trigger)
-        let html = '<tr class="accordion-row" id="hrow-' + idx + '" onclick="window._toggleHistory(' + idx + ')">'
-          + '<td>' + escapeHtml(r.timestamp) + '</td>'
-          + '<td>' + escapeHtml(r.request) + '</td>'
+        return '<tr class="clickable" onclick="window._nav(2,' + idx + ')">'
+          + '<td>' + escapeHtml(fmtDate(ex.start_time)) + '</td>'
+          + '<td>' + escapeHtml(truncate(ex.prompt, 80)) + '</td>'
+          + '<td>' + agentCount + '</td>'
+          + '<td class="num">' + fmtNum(totalTokens) + '</td>'
           + '<td>' + badge + '</td>'
-          + '<td>' + escapeHtml(r.summary) + '</td>'
-          + '<td>' + (r.changes_count || 0) + '</td>'
+          + '<td>' + changesCount + '</td>'
           + '</tr>';
-
-        // Accordion panel row
-        html += '<tr class="accordion-panel" id="hpanel-' + idx + '">'
-          + '<td colspan="5"><div class="accordion-content">';
-
-        // (a) Changes table
-        const changes = r.changes || [];
-        if (changes.length > 0) {{
-          html += '<h4>Changes</h4><table><thead><tr><th>Path</th><th>Type</th><th>Intent</th></tr></thead><tbody>';
-          changes.forEach(c => {{
-            const cType = (c.type || 'modified').toLowerCase();
-            let badgeClass = 'modified';
-            if (cType === 'created' || cType === 'create') badgeClass = 'created';
-            else if (cType === 'deleted' || cType === 'delete') badgeClass = 'deleted';
-            html += '<tr>'
-              + '<td><code>' + escapeHtml(c.path || '') + '</code></td>'
-              + '<td><span class="badge ' + badgeClass + '">' + escapeHtml(cType) + '</span></td>'
-              + '<td>' + escapeHtml(c.intent || '') + '</td>'
-              + '</tr>';
-          }});
-          html += '</tbody></table>';
-        }} else {{
-          html += '<h4>Changes</h4><span style="color:#666;font-style:italic">No file changes</span>';
-        }}
-
-        // (b) Tool Usage
-        const toolUsage = r.tool_usage || {{}};
-        const toolEntries = Object.entries(toolUsage).sort((a, b) => b[1] - a[1]);
-        if (toolEntries.length > 0) {{
-          html += '<h4>Tool Usage</h4><div class="tool-list">';
-          const topTools = toolEntries.slice(0, 10);
-          topTools.forEach(([name, count]) => {{
-            html += '<span class="tool-chip">' + escapeHtml(name) + '<span class="tool-count">' + count + '</span></span>';
-          }});
-          if (toolEntries.length > 10) {{
-            const remaining = toolEntries.length - 10;
-            html += '<span class="tool-chip" style="color:#666">+' + remaining + ' more</span>';
-          }}
-          html += '</div>';
-        }}
-
-        // (c) Session link + (d) Token/Context summary
-        if (r.matched_session_id) {{
-          html += '<div class="meta-row">';
-          html += '<span><span class="label">Session:</span> <a class="session-link" onclick="event.stopPropagation();window._nav(2,\\'' + r.matched_session_id + '\\')">' + r.matched_session_id.slice(0, 8) + '... &rarr;</a></span>';
-          if (r.session_tokens) {{
-            html += '<span><span class="label">Tokens:</span> ' + fmtNum(r.session_tokens) + '</span>';
-          }}
-          if (r.session_max_context) {{
-            html += '<span><span class="label">Max Context:</span> ' + fmtNum(r.session_max_context) + '</span>';
-          }}
-          html += '</div>';
-        }}
-
-        // (e) Error
-        if (r.error) {{
-          html += '<div class="error-box">' + escapeHtml(r.error) + '</div>';
-        }}
-
-        html += '</div></td></tr>';
-        return html;
       }}).join('');
     }}
 
@@ -1270,25 +1290,78 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
   }}
 
   // -----------------------------------------------------------------------
-  // Level 2: Session Detail
+  // Level 2: Execution Detail
   // -----------------------------------------------------------------------
-  function renderSessionDetail(sessionId) {{
-    const sess = getSession(sessionId);
-    if (!sess) {{
-      document.getElementById('gantt-container').innerHTML = '<div class="empty-msg">Session not found</div>';
+  function renderExecutionDetail(execIdx) {{
+    const execs = D.executions || [];
+    const ex = execs[execIdx];
+    if (!ex) {{
+      document.getElementById('exec-summary-card').innerHTML = '<div class="empty-msg">Execution not found</div>';
       return;
     }}
 
-    const agents = sess.agents || [];
-    const timedAgents = agents.filter(a => a.start_time);
-    const untimedAgents = agents.filter(a => !a.start_time);
+    const agents = ex.agents || [];
+    const changes = ex.changes || [];
+
+    // --- Summary card ---
+    const summaryCard = document.getElementById('exec-summary-card');
+    let summaryHtml = '<div class="exec-summary">';
+    summaryHtml += '<div class="prompt-text">' + escapeHtml(ex.prompt || '(no prompt)') + '</div>';
+    summaryHtml += '<div class="stat-pills">';
+    summaryHtml += '<span class="stat-pill">Time<span class="pill-val">' + escapeHtml(fmtDate(ex.start_time)) + '</span></span>';
+    summaryHtml += '<span class="stat-pill">Agents<span class="pill-val">' + agents.length + '</span></span>';
+    summaryHtml += '<span class="stat-pill">Tokens<span class="pill-val">' + fmtNum(ex.total_tokens || 0) + '</span></span>';
+    if ('success' in ex) {{
+      const sBadge = ex.success ? '<span class="badge success">OK</span>' : '<span class="badge fail">FAIL</span>';
+      summaryHtml += '<span class="stat-pill">Status ' + sBadge + '</span>';
+    }}
+    if (changes.length > 0) {{
+      summaryHtml += '<span class="stat-pill">Changes<span class="pill-val">' + changes.length + '</span></span>';
+    }}
+    summaryHtml += '</div></div>';
+    if (ex.summary) {{
+      summaryHtml += '<div style="margin-top:8px;font-size:0.82rem;color:#aaa">' + escapeHtml(ex.summary) + '</div>';
+    }}
+    if (ex.error) {{
+      summaryHtml += '<div class="error-box">' + escapeHtml(ex.error) + '</div>';
+    }}
+    summaryCard.innerHTML = summaryHtml;
+
+    // --- Agent Pipeline cards ---
+    const pipeEl = document.getElementById('pipeline-container');
+    if (agents.length === 0) {{
+      pipeEl.innerHTML = '<div class="empty-msg">No agents</div>';
+    }} else {{
+      let pipeHtml = '';
+      agents.forEach((a, ai) => {{
+        if (ai > 0) {{
+          pipeHtml += '<div class="card-connector" style="display:flex;align-items:center;color:#4fc3f7;font-size:1.4rem;flex-shrink:0">&#x2192;</div>';
+        }}
+        const color = getTypeColor(a.agent_type);
+        const msgPreview = a.message ? truncate(a.message, 200) : '';
+        pipeHtml += '<div class="agent-card" onclick="window._nav(3,' + execIdx + ',' + ai + ')" style="border-left:3px solid ' + color + '">';
+        pipeHtml += '<div class="card-header"><span class="type-name" style="color:' + color + '">' + escapeHtml(a.agent_type) + '</span>';
+        pipeHtml += '<span class="order-badge">#' + a.order + '</span></div>';
+        pipeHtml += '<div class="card-stats">';
+        pipeHtml += '<span>Duration</span><span class="stat-val">' + fmtDuration(a.duration_ms) + '</span>';
+        pipeHtml += '<span>Tokens</span><span class="stat-val">' + fmtNum(a.total_tokens) + '</span>';
+        pipeHtml += '<span>Context</span><span class="stat-val">' + fmtNum(a.max_context_fill) + '</span>';
+        pipeHtml += '<span>Turns</span><span class="stat-val">' + (a.turn_count || (a.turns || []).length || 0) + '</span>';
+        pipeHtml += '</div>';
+        if (msgPreview) {{
+          pipeHtml += '<div class="message-preview" title="Click card to see full message">' + escapeHtml(msgPreview) + '</div>';
+        }}
+        pipeHtml += '</div>';
+      }});
+      pipeEl.innerHTML = pipeHtml;
+    }}
 
     // --- Gantt chart ---
+    const timedAgents = agents.filter(a => a.start_time);
     const ganttEl = document.getElementById('gantt-container');
     if (timedAgents.length === 0) {{
       ganttEl.innerHTML = '<div class="empty-msg">No timeline data available</div>';
     }} else {{
-      // Compute time range
       let minTime = Infinity, maxTime = -Infinity;
       timedAgents.forEach(a => {{
         const st = new Date(a.start_time).getTime();
@@ -1299,8 +1372,9 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
       const totalRange = maxTime - minTime || 1;
 
       let ganttHtml = '';
-      timedAgents.sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
-      timedAgents.forEach(a => {{
+      const sorted = [...timedAgents].sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
+      sorted.forEach((a, i) => {{
+        const origIdx = agents.indexOf(a);
         const st = new Date(a.start_time).getTime();
         const et = a.end_time ? new Date(a.end_time).getTime() : maxTime;
         const left = ((st - minTime) / totalRange * 100).toFixed(2);
@@ -1309,7 +1383,7 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
         const durStr = fmtDuration(a.duration_ms);
         const label = a.agent_type + ' (' + a.agent_id_short + ')';
 
-        ganttHtml += '<div class="gantt-row" onclick="window._nav(3,\\'' + sessionId + '\\',\\'' + a.agent_id + '\\')">'
+        ganttHtml += '<div class="gantt-row" onclick="window._nav(3,' + execIdx + ',' + origIdx + ')">'
           + '<div class="gantt-label">' + escapeHtml(label) + '</div>'
           + '<div class="gantt-track">'
           + '<div class="gantt-bar" style="left:' + left + '%;width:' + width + '%;background:' + color + '">'
@@ -1317,7 +1391,6 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
           + '</div></div></div>';
       }});
 
-      // Time axis
       const startDate = new Date(minTime);
       const endDate = new Date(maxTime);
       const midDate = new Date(minTime + totalRange / 2);
@@ -1332,16 +1405,14 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
 
     // --- Agent table ---
     const atbody = document.getElementById('agent-table-body');
-    const allAgents = [...timedAgents, ...untimedAgents];
-    if (allAgents.length === 0) {{
-      atbody.innerHTML = '<tr><td colspan="8" class="empty">No agent data</td></tr>';
+    if (agents.length === 0) {{
+      atbody.innerHTML = '<tr><td colspan="7" class="empty">No agent data</td></tr>';
     }} else {{
-      atbody.innerHTML = allAgents.map((a, i) => {{
-        return '<tr class="clickable" onclick="window._nav(3,\\'' + sessionId + '\\',\\'' + a.agent_id + '\\')">'
-          + '<td>' + (a.order || (i + 1)) + '</td>'
+      atbody.innerHTML = agents.map((a, ai) => {{
+        return '<tr class="clickable" onclick="window._nav(3,' + execIdx + ',' + ai + ')">'
+          + '<td>' + a.order + '</td>'
           + '<td><span style="color:' + getTypeColor(a.agent_type) + '">' + escapeHtml(a.agent_type) + '</span></td>'
           + '<td><code>' + escapeHtml(a.agent_id_short) + '</code></td>'
-          + '<td>' + fmtTime(a.start_time) + '</td>'
           + '<td>' + fmtDuration(a.duration_ms) + '</td>'
           + '<td class="num">' + fmtNum(a.total_tokens) + '</td>'
           + '<td class="num">' + fmtNum(a.max_context_fill) + '</td>'
@@ -1350,66 +1421,41 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
       }}).join('');
     }}
 
-    // --- Session token donut ---
-    const donutData = allAgents.filter(a => a.total_tokens > 0);
-    if (donutData.length > 0) {{
-      charts.push(new Chart(document.getElementById('sessionDonut'), {{
-        type: 'doughnut',
-        data: {{
-          labels: donutData.map(a => a.agent_type + ' (' + a.agent_id_short + ')'),
-          datasets: [{{
-            data: donutData.map(a => a.total_tokens),
-            backgroundColor: donutData.map(a => getTypeColor(a.agent_type)),
-            borderWidth: 0,
-          }}],
-        }},
-        options: {{
-          responsive: true,
-          plugins: {{ legend: {{ position: 'right', labels: {{ color: '#ccc', font: {{ size: 11 }} }} }} }},
-        }},
-      }}));
+    // --- Changes card ---
+    const changesCard = document.getElementById('changes-card');
+    const ctbody = document.getElementById('changes-table-body');
+    if (changes.length > 0) {{
+      changesCard.style.display = '';
+      ctbody.innerHTML = changes.map(c => {{
+        const cType = (c.type || 'modified').toLowerCase();
+        let badgeClass = 'modified';
+        if (cType === 'created' || cType === 'create') badgeClass = 'created';
+        else if (cType === 'deleted' || cType === 'delete') badgeClass = 'deleted';
+        return '<tr>'
+          + '<td><code>' + escapeHtml(c.path || '') + '</code></td>'
+          + '<td><span class="badge ' + badgeClass + '">' + escapeHtml(cType) + '</span></td>'
+          + '<td>' + escapeHtml(c.intent || '') + '</td>'
+          + '</tr>';
+      }}).join('');
     }} else {{
-      document.getElementById('sessionDonutWrap').innerHTML = '<div class="empty-msg">No token data</div>';
-    }}
-
-    // --- Agent type bar chart ---
-    const typeMap = {{}};
-    allAgents.forEach(a => {{
-      const t = a.agent_type;
-      typeMap[t] = (typeMap[t] || 0) + (a.total_tokens || 0);
-    }});
-    const typeKeys = Object.keys(typeMap).filter(k => typeMap[k] > 0);
-    if (typeKeys.length > 0) {{
-      charts.push(new Chart(document.getElementById('sessionTypeBar'), {{
-        type: 'bar',
-        data: {{
-          labels: typeKeys,
-          datasets: [{{
-            label: 'Total Tokens',
-            data: typeKeys.map(k => typeMap[k]),
-            backgroundColor: typeKeys.map(k => getTypeColor(k)),
-          }}],
-        }},
-        options: {{
-          responsive: true,
-          indexAxis: 'y',
-          plugins: {{ legend: {{ display: false }} }},
-          scales: {{
-            x: {{ ticks: {{ color: '#999' }}, grid: {{ color: '#2a2a4a' }} }},
-            y: {{ ticks: {{ color: '#ccc' }}, grid: {{ color: '#2a2a4a' }} }},
-          }},
-        }},
-      }}));
-    }} else {{
-      document.getElementById('sessionTypeBarWrap').innerHTML = '<div class="empty-msg">No token data</div>';
+      changesCard.style.display = 'none';
+      ctbody.innerHTML = '';
     }}
   }}
 
   // -----------------------------------------------------------------------
   // Level 3: Agent Detail
   // -----------------------------------------------------------------------
-  function renderAgentDetail(sessionId, agentId) {{
-    const agent = getAgent(sessionId, agentId);
+  function renderAgentDetail(execIdx, agentIdx) {{
+    const execs = D.executions || [];
+    const ex = execs[execIdx];
+    if (!ex) {{
+      document.getElementById('agent-summary').innerHTML = '<div class="empty-msg">Execution not found</div>';
+      return;
+    }}
+
+    const agents = ex.agents || [];
+    const agent = agents[agentIdx];
     if (!agent) {{
       document.getElementById('agent-summary').innerHTML = '<div class="empty-msg">Agent not found</div>';
       return;
@@ -1419,7 +1465,7 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
     const summaryEl = document.getElementById('agent-summary');
     summaryEl.innerHTML = '<table>'
       + '<tr><th>Agent Type</th><td><span style="color:' + getTypeColor(agent.agent_type) + '">' + escapeHtml(agent.agent_type) + '</span></td></tr>'
-      + '<tr><th>Agent ID</th><td><code>' + escapeHtml(agent.agent_id) + '</code></td></tr>'
+      + '<tr><th>Agent ID</th><td><code>' + escapeHtml(agent.agent_id || '') + '</code></td></tr>'
       + '<tr><th>Start</th><td>' + fmtTime(agent.start_time) + '</td></tr>'
       + '<tr><th>Duration</th><td>' + fmtDuration(agent.duration_ms) + '</td></tr>'
       + '<tr><th>Total Tokens</th><td class="num">' + fmtNum(agent.total_tokens) + '</td></tr>'
@@ -1428,7 +1474,7 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
       + '<tr><th>Compactions</th><td>' + (agent.compaction_count || 0) + '</td></tr>'
       + '</table>';
 
-    // --- Token breakdown bar chart ---
+    // --- Token breakdown doughnut ---
     const tokenParts = [
       {{ label: 'Input', value: agent.input_tokens || 0, color: '#4fc3f7' }},
       {{ label: 'Cache Create', value: agent.cache_creation_input_tokens || 0, color: '#ffb74d' }},
@@ -1516,6 +1562,17 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
       }}));
     }} else {{
       document.getElementById('agentContextWrap').innerHTML = '<div class="empty-msg">No turn data</div>';
+    }}
+
+    // --- Message panel ---
+    const msgCard = document.getElementById('message-card');
+    const msgContent = document.getElementById('agent-message-content');
+    if (agent.message) {{
+      msgCard.style.display = '';
+      msgContent.textContent = agent.message;
+    }} else {{
+      msgCard.style.display = 'none';
+      msgContent.textContent = '';
     }}
 
     // --- Turn table ---
