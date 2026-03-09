@@ -31,24 +31,31 @@ _TIMELINE_EVENTS = {
     "SubagentStart", "SubagentStop", "Stop", "SessionStart",
     "UserPromptSubmit",
 }
-_TOOL_EVENTS = {"PreToolUse"}
+_TOOL_EVENTS = {"PreToolUse", "PostToolUse"}
 
 
-def _parse_event_log(log_path: str) -> tuple[list[dict], list[dict]]:
-    """Parse a JSONL event log and extract timeline + tool events.
+def _parse_event_log(
+    log_path: str,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Parse a JSONL event log and extract timeline, tool, and agent events.
 
-    Returns a tuple of (timeline_events, tool_events).
+    Returns a tuple of (timeline_events, tool_events, agent_calls).
 
     timeline_events include SubagentStart, SubagentStop, Stop,
     SessionStart, and UserPromptSubmit events.  SubagentStop events
     carry ``last_assistant_message`` and ``stop_hook_active`` fields.
     UserPromptSubmit events carry the ``prompt`` field.
+
+    agent_calls track Agent tool invocations matched across
+    PreToolUse / PostToolUse pairs via ``tool_use_id``.
     """
     timeline_events: list[dict] = []
     tool_events: list[dict] = []
+    # Pending Agent PreToolUse entries keyed by tool_use_id
+    _pending_agents: dict[str, dict] = {}
     path = Path(log_path)
     if not path.exists():
-        return timeline_events, tool_events
+        return timeline_events, tool_events, []
 
     try:
         with open(path, encoding="utf-8") as f:
@@ -81,15 +88,57 @@ def _parse_event_log(log_path: str) -> tuple[list[dict], list[dict]]:
                         evt["prompt"] = entry.get("prompt", "")
                     timeline_events.append(evt)
                 elif event_name in _TOOL_EVENTS:
+                    tool_name = entry.get("tool_name", "unknown")
+
+                    # --- Agent tool call tracking ---
+                    if tool_name == "Agent":
+                        tuid = entry.get("tool_use_id", "")
+                        if event_name == "PreToolUse" and tuid:
+                            ti = entry.get("tool_input") or {}
+                            _pending_agents[tuid] = {
+                                "prompt": ti.get("prompt", ""),
+                                "subagent_type": ti.get(
+                                    "subagent_type", ""
+                                ),
+                                "description": ti.get("description", ""),
+                                "caller_agent_id": (
+                                    entry.get("agent_id") or "main"
+                                ),
+                                "tool_use_id": tuid,
+                                "start_time": entry.get("timestamp", ""),
+                            }
+                        elif event_name == "PostToolUse" and tuid:
+                            pending = _pending_agents.get(tuid)
+                            if pending is not None:
+                                tr = entry.get("tool_response") or {}
+                                pending["child_agent_id"] = tr.get(
+                                    "agentId", ""
+                                )
+                                pending["total_tokens"] = tr.get(
+                                    "totalTokens", 0
+                                )
+                                pending["total_duration_ms"] = tr.get(
+                                    "totalDurationMs", 0
+                                )
+                                pending["total_tool_use_count"] = tr.get(
+                                    "totalToolUseCount", 0
+                                )
+                                pending["end_time"] = entry.get(
+                                    "timestamp", ""
+                                )
+                        # Skip appending Agent events to tool_events
+                        continue
+
                     tool_events.append({
                         "hook_event_name": event_name,
-                        "tool_name": entry.get("tool_name", "unknown"),
+                        "tool_name": tool_name,
                         "timestamp": entry.get("timestamp", ""),
                     })
     except OSError:
         pass
 
-    return timeline_events, tool_events
+    agent_calls = list(_pending_agents.values())
+    return timeline_events, tool_events, agent_calls
 
 
 def _parse_iso(ts: str) -> datetime | None:
@@ -114,19 +163,36 @@ def _parse_iso(ts: str) -> datetime | None:
 # Execution splitting
 # ---------------------------------------------------------------------------
 
-def _split_executions(events: list[dict]) -> list[dict]:
+def _split_executions(
+    events: list[dict],
+    agent_calls: list[dict] | None = None,
+) -> list[dict]:
     """Split timeline events into execution units bounded by UserPromptSubmit.
 
     Each execution is a dict:
         {prompt, start_time, end_time, agents: [
             {agent_id, agent_type, start_time, end_time, duration_ms,
-             order, message}
+             order, message, input_prompt, parent_agent_id,
+             parent_agent_type}
         ]}
+
+    When *agent_calls* (from ``_parse_event_log``) are supplied, each
+    agent is enriched with its parent relationship:
+    - ``input_prompt`` – the prompt the parent passed to the Agent tool.
+    - ``parent_agent_id`` – the caller's agent_id (or ``"main"``).
+    - ``parent_agent_type`` – the agent_type of the parent, resolved from
+      the starts dict (falls back to ``"main"``).
 
     Dedup logic for SubagentStop: when the same agent_id has two stop
     events (stop_hook_active=false and true), prefer the one with
     stop_hook_active=false for ``message`` extraction (richer output).
     """
+    # Build lookup: child_agent_id -> agent_call record
+    child_to_call: dict[str, dict] = {
+        ac["child_agent_id"]: ac
+        for ac in (agent_calls or [])
+        if ac.get("child_agent_id")
+    }
     # Collect execution boundaries
     exec_boundaries: list[int] = []
     for i, evt in enumerate(events):
@@ -216,6 +282,20 @@ def _split_executions(events: list[dict]) -> list[dict]:
             if end_ts and end_ts > exec_end:
                 exec_end = end_ts
 
+            # Enrich with parent-child relationship from agent_calls
+            call = child_to_call.get(aid)
+            if call:
+                input_prompt = call.get("prompt", "")
+                parent_agent_id = call.get("caller_agent_id", "")
+                parent_agent_type = (
+                    starts.get(parent_agent_id, {}).get("agent_type")
+                    or "main"
+                )
+            else:
+                input_prompt = ""
+                parent_agent_id = ""
+                parent_agent_type = ""
+
             agents.append({
                 "agent_id": aid,
                 "agent_type": start_evt.get("agent_type", "unknown"),
@@ -224,6 +304,9 @@ def _split_executions(events: list[dict]) -> list[dict]:
                 "duration_ms": duration_ms,
                 "order": 0,
                 "message": message or "",
+                "input_prompt": input_prompt,
+                "parent_agent_id": parent_agent_id,
+                "parent_agent_type": parent_agent_type,
             })
 
         # Also handle stops without matching starts (orphan stops)
@@ -248,6 +331,20 @@ def _split_executions(events: list[dict]) -> list[dict]:
             if end_ts and end_ts > exec_end:
                 exec_end = end_ts
 
+            # Enrich orphan-stop agent with parent-child relationship
+            call = child_to_call.get(aid)
+            if call:
+                input_prompt = call.get("prompt", "")
+                parent_agent_id = call.get("caller_agent_id", "")
+                parent_agent_type = (
+                    starts.get(parent_agent_id, {}).get("agent_type")
+                    or "main"
+                )
+            else:
+                input_prompt = ""
+                parent_agent_id = ""
+                parent_agent_type = ""
+
             agents.append({
                 "agent_id": aid,
                 "agent_type": best_stop.get("agent_type", "unknown"),
@@ -256,6 +353,9 @@ def _split_executions(events: list[dict]) -> list[dict]:
                 "duration_ms": 0,
                 "order": 0,
                 "message": message or "",
+                "input_prompt": input_prompt,
+                "parent_agent_id": parent_agent_id,
+                "parent_agent_type": parent_agent_type,
             })
 
         # Sort agents by start_time, assign order
@@ -329,10 +429,10 @@ def aggregate_data(project_dir: str, limit: int = 50) -> dict:
             sid = fp.stem
             if sid in ("hook_errors", "schema_violations"):
                 continue
-            events, tool_events = _parse_event_log(str(fp))
+            events, tool_events, agent_calls = _parse_event_log(str(fp))
 
-            # Split into executions
-            execs = _split_executions(events)
+            # Split into executions (pass agent_calls for parent-child)
+            execs = _split_executions(events, agent_calls=agent_calls)
             for ex in execs:
                 ex["session_id"] = sid
                 # Enrich agents with token/context data
@@ -898,6 +998,50 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
     word-break: break-word;
   }}
 
+  /* Parent label in agent cards */
+  .parent-label {{
+    font-size: 0.7rem;
+    color: #90caf9;
+    margin-bottom: 6px;
+  }}
+  .input-prompt-preview {{
+    font-size: 0.73rem;
+    color: #999;
+    margin-top: 4px;
+    max-height: 2.8em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    border-top: 1px dashed #2a2a4a;
+    padding-top: 4px;
+  }}
+
+  /* Collapsible input prompt panel (Level 3) */
+  .collapsible-header {{
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    user-select: none;
+    gap: 8px;
+  }}
+  .collapsible-header .toggle-icon {{
+    display: inline-block;
+    font-size: 0.7rem;
+    color: #4fc3f7;
+    transition: transform 0.2s;
+  }}
+  .collapsible-header .toggle-icon.open {{
+    transform: rotate(90deg);
+  }}
+  .collapsible-body {{
+    display: none;
+  }}
+  .collapsible-body.open {{
+    display: block;
+  }}
+
   /* Exec summary header */
   .exec-summary {{
     display: flex;
@@ -991,6 +1135,7 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
               <th>#</th>
               <th>Agent Type</th>
               <th>Agent ID</th>
+              <th>Parent</th>
               <th>Duration</th>
               <th>Tokens</th>
               <th>Max Context</th>
@@ -1033,6 +1178,17 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
     <div class="card full">
       <h2>Context Fill per Turn</h2>
       <div id="agentContextWrap"><canvas id="agentContextChart"></canvas></div>
+    </div>
+    <div class="card full" id="input-prompt-card" style="display:none">
+      <div class="collapsible-header" onclick="window._toggleInputPrompt()">
+        <span class="toggle-icon" id="input-prompt-toggle">&#x25B6;</span>
+        <h2 style="margin-bottom:0">Input Prompt</h2>
+      </div>
+      <div class="collapsible-body" id="input-prompt-body">
+        <div class="message-full" style="margin-top:10px">
+          <div class="message-content" id="input-prompt-content"></div>
+        </div>
+      </div>
     </div>
     <div class="card full" id="message-card">
       <h2>Agent Output</h2>
@@ -1205,6 +1361,19 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
     navigate(level, a, b);
   }};
 
+  window._toggleInputPrompt = function() {{
+    const body = document.getElementById('input-prompt-body');
+    const icon = document.getElementById('input-prompt-toggle');
+    const isOpen = body.classList.contains('open');
+    if (isOpen) {{
+      body.classList.remove('open');
+      icon.classList.remove('open');
+    }} else {{
+      body.classList.add('open');
+      icon.classList.add('open');
+    }}
+  }};
+
   // -----------------------------------------------------------------------
   // Level 1: Execution History
   // -----------------------------------------------------------------------
@@ -1339,7 +1508,11 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
         }}
         const color = getTypeColor(a.agent_type);
         const msgPreview = a.message ? truncate(a.message, 200) : '';
+        const inputPromptPreview = a.input_prompt ? truncate(a.input_prompt, 120) : '';
         pipeHtml += '<div class="agent-card" onclick="window._nav(3,' + execIdx + ',' + ai + ')" style="border-left:3px solid ' + color + '">';
+        if (a.parent_agent_type) {{
+          pipeHtml += '<div class="parent-label">Spawned by ' + escapeHtml(a.parent_agent_type) + '</div>';
+        }}
         pipeHtml += '<div class="card-header"><span class="type-name" style="color:' + color + '">' + escapeHtml(a.agent_type) + '</span>';
         pipeHtml += '<span class="order-badge">#' + a.order + '</span></div>';
         pipeHtml += '<div class="card-stats">';
@@ -1348,6 +1521,9 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
         pipeHtml += '<span>Context</span><span class="stat-val">' + fmtNum(a.max_context_fill) + '</span>';
         pipeHtml += '<span>Turns</span><span class="stat-val">' + (a.turn_count || (a.turns || []).length || 0) + '</span>';
         pipeHtml += '</div>';
+        if (inputPromptPreview) {{
+          pipeHtml += '<div class="input-prompt-preview" title="Input prompt">' + escapeHtml(inputPromptPreview) + '</div>';
+        }}
         if (msgPreview) {{
           pipeHtml += '<div class="message-preview" title="Click card to see full message">' + escapeHtml(msgPreview) + '</div>';
         }}
@@ -1406,13 +1582,15 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
     // --- Agent table ---
     const atbody = document.getElementById('agent-table-body');
     if (agents.length === 0) {{
-      atbody.innerHTML = '<tr><td colspan="7" class="empty">No agent data</td></tr>';
+      atbody.innerHTML = '<tr><td colspan="8" class="empty">No agent data</td></tr>';
     }} else {{
       atbody.innerHTML = agents.map((a, ai) => {{
+        const parentLabel = a.parent_agent_type ? escapeHtml(a.parent_agent_type) : '<span style="color:#666">-</span>';
         return '<tr class="clickable" onclick="window._nav(3,' + execIdx + ',' + ai + ')">'
           + '<td>' + a.order + '</td>'
           + '<td><span style="color:' + getTypeColor(a.agent_type) + '">' + escapeHtml(a.agent_type) + '</span></td>'
           + '<td><code>' + escapeHtml(a.agent_id_short) + '</code></td>'
+          + '<td>' + parentLabel + '</td>'
           + '<td>' + fmtDuration(a.duration_ms) + '</td>'
           + '<td class="num">' + fmtNum(a.total_tokens) + '</td>'
           + '<td class="num">' + fmtNum(a.max_context_fill) + '</td>'
@@ -1463,9 +1641,13 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
 
     // --- Summary card ---
     const summaryEl = document.getElementById('agent-summary');
+    const parentDisplay = agent.parent_agent_id
+      ? escapeHtml(agent.parent_agent_type || 'unknown') + ' (<code>' + escapeHtml(agent.parent_agent_id) + '</code>)'
+      : 'Main (top-level)';
     summaryEl.innerHTML = '<table>'
       + '<tr><th>Agent Type</th><td><span style="color:' + getTypeColor(agent.agent_type) + '">' + escapeHtml(agent.agent_type) + '</span></td></tr>'
       + '<tr><th>Agent ID</th><td><code>' + escapeHtml(agent.agent_id || '') + '</code></td></tr>'
+      + '<tr><th>Parent Agent</th><td>' + parentDisplay + '</td></tr>'
       + '<tr><th>Start</th><td>' + fmtTime(agent.start_time) + '</td></tr>'
       + '<tr><th>Duration</th><td>' + fmtDuration(agent.duration_ms) + '</td></tr>'
       + '<tr><th>Total Tokens</th><td class="num">' + fmtNum(agent.total_tokens) + '</td></tr>'
@@ -1562,6 +1744,21 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
       }}));
     }} else {{
       document.getElementById('agentContextWrap').innerHTML = '<div class="empty-msg">No turn data</div>';
+    }}
+
+    // --- Input Prompt panel ---
+    const ipCard = document.getElementById('input-prompt-card');
+    const ipContent = document.getElementById('input-prompt-content');
+    const ipBody = document.getElementById('input-prompt-body');
+    const ipIcon = document.getElementById('input-prompt-toggle');
+    if (agent.input_prompt) {{
+      ipCard.style.display = '';
+      ipContent.textContent = agent.input_prompt;
+      ipBody.classList.remove('open');
+      ipIcon.classList.remove('open');
+    }} else {{
+      ipCard.style.display = 'none';
+      ipContent.textContent = '';
     }}
 
     // --- Message panel ---
