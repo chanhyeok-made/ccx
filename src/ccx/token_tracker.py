@@ -12,6 +12,8 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ccx._transcript_utils import parse_assistant_messages, infer_agent_info
+
 _CCX_DIR = ".ccx"
 _TOKEN_USAGE_DIR = "token-usage"
 
@@ -68,86 +70,34 @@ def _ensure_dir(project_dir: str) -> None:
 # Transcript parsing
 # ---------------------------------------------------------------------------
 
-def _deduplicate_messages(entries: list[dict]) -> list[dict]:
-    """Deduplicate streaming assistant messages by message ID.
-
-    Claude Code transcripts emit multiple JSONL lines for the same message
-    during streaming.  For each unique message ID, keep the entry whose
-    ``stop_reason`` is not ``None``.  If no such entry exists, keep the one
-    with the highest ``output_tokens``.
-    """
-    by_id: dict[str, dict] = {}
-
-    for entry in entries:
-        msg = entry.get("message", {})
-        msg_id = msg.get("id", "")
-        if not msg_id:
-            continue
-
-        existing = by_id.get(msg_id)
-        if existing is None:
-            by_id[msg_id] = entry
-            continue
-
-        # Prefer the entry with a non-None stop_reason
-        existing_stop = existing.get("message", {}).get("stop_reason")
-        current_stop = msg.get("stop_reason")
-
-        if current_stop is not None and existing_stop is None:
-            by_id[msg_id] = entry
-        elif current_stop is None and existing_stop is not None:
-            pass  # keep existing
-        else:
-            # Both have stop_reason or both lack it — pick higher output_tokens
-            existing_out = existing.get("message", {}).get("usage", {}).get("output_tokens", 0)
-            current_out = msg.get("usage", {}).get("output_tokens", 0)
-            if current_out > existing_out:
-                by_id[msg_id] = entry
-
-    return list(by_id.values())
-
-
-def parse_transcript(transcript_path: str) -> AgentUsage:
+def parse_transcript(
+    transcript_path: str,
+    agent_id: str | None = None,
+    agent_type: str | None = None,
+) -> AgentUsage:
     """Parse a single transcript JSONL file and return aggregated AgentUsage.
 
     Processes only ``type == "assistant"`` lines with a ``message.usage``
     object.  Handles streaming deduplication so each message is counted once.
 
-    The ``agent_id`` and ``agent_type`` are inferred from the transcript path:
-    - Main transcript: agent_id="main", agent_type="main"
-    - Subagent transcript (``subagents/agent-{id}.jsonl``):
-      agent_id from filename, agent_type from companion ``.meta.json``.
+    When *agent_id* or *agent_type* are ``None`` they are inferred from the
+    transcript path via :func:`infer_agent_info`.
     """
     path = Path(transcript_path)
-    if not path.exists():
-        return AgentUsage(agent_id="unknown", agent_type="unknown")
 
-    # Determine agent_id and agent_type from path
-    agent_id, agent_type = _infer_agent_info(path)
+    # Infer agent info when not explicitly provided
+    if agent_id is None or agent_type is None:
+        inferred_id, inferred_type = infer_agent_info(path)
+        if agent_id is None:
+            agent_id = inferred_id
+        if agent_type is None:
+            agent_type = inferred_type
 
-    # Collect all assistant entries with usage data
-    assistant_entries: list[dict] = []
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if entry.get("type") != "assistant":
-                    continue
-                msg = entry.get("message", {})
-                if not msg.get("usage"):
-                    continue
-                assistant_entries.append(entry)
-    except OSError:
+    # Parse and deduplicate assistant messages
+    unique_entries = parse_assistant_messages(transcript_path)
+
+    if not unique_entries:
         return AgentUsage(agent_id=agent_id, agent_type=agent_type)
-
-    # Deduplicate streaming entries
-    unique_entries = _deduplicate_messages(assistant_entries)
 
     # Aggregate
     input_tokens = 0
@@ -175,31 +125,6 @@ def parse_transcript(transcript_path: str) -> AgentUsage:
         total_tokens=total,
         turn_count=turn_count,
     )
-
-
-def _infer_agent_info(path: Path) -> tuple[str, str]:
-    """Infer agent_id and agent_type from a transcript file path.
-
-    Main transcript:      ``{session_id}.jsonl``  -> ("main", "main")
-    Subagent transcript:  ``subagents/agent-{id}.jsonl``
-                          -> ("agent-{id}", type from .meta.json or "unknown")
-    """
-    name = path.stem  # e.g. "agent-a1515663a606132aa" or session UUID
-
-    if path.parent.name == "subagents" and name.startswith("agent-"):
-        agent_id = name
-        # Try to read companion meta.json for agent_type
-        meta_path = path.with_suffix(".meta.json")
-        agent_type = "unknown"
-        if meta_path.exists():
-            try:
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                agent_type = meta.get("agentType", "unknown")
-            except (json.JSONDecodeError, OSError):
-                pass
-        return agent_id, agent_type
-
-    return "main", "main"
 
 
 # ---------------------------------------------------------------------------

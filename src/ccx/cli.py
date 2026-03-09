@@ -307,6 +307,123 @@ def _show_session_detail(project_dir: str, session_id: str):
     )
 
 
+@cli.command()
+@click.argument("project_dir", default=".", type=click.Path(exists=True))
+@click.option("--limit", "-n", default=10, show_default=True, help="Number of recent sessions to show")
+@click.option("--detail", "-d", default=None, help="Show per-agent context breakdown for a session ID")
+def context(project_dir: str, limit: int, detail: str):
+    """Show context window usage statistics for recent sessions."""
+    from ccx.context_tracker import list_context_usages, get_context_usage
+
+    project = Path(project_dir).resolve()
+    ccx_dir = project / ".ccx"
+
+    if not ccx_dir.exists():
+        click.echo("Error: ccx is not initialized. Run 'ccx init' first.", err=True)
+        sys.exit(1)
+
+    if detail:
+        _show_context_detail(str(project), detail)
+        return
+
+    result = list_context_usages(str(project), limit=limit)
+    sessions = result.get("sessions", [])
+
+    if not sessions:
+        click.echo("No context usage data found.")
+        click.echo("Context data is recorded automatically during /ccx:run sessions.")
+        return
+
+    click.echo(f"Context window usage for: {project}")
+    click.echo(f"Showing {len(sessions)} most recent session(s)\n")
+
+    columns = [
+        ("Session ID",   "session_id",            12, lambda v: v[:12] if len(v) > 12 else v),
+        ("Timestamp",    "timestamp",             19, lambda v: v[:19].replace("T", " ") if v else "-"),
+        ("Agents",       "agent_count",            6, lambda v: str(v)),
+        ("Max Fill",     "total_max_context_fill", 10, _format_tokens),
+        ("Avg Fill",     "avg_context_fill",       10, _format_tokens),
+        ("Final Fill",   "final_context_fill",     10, _format_tokens),
+        ("Compactions",  "total_compaction_count",  11, lambda v: str(v)),
+    ]
+
+    header = "  ".join(h.ljust(w) for h, _, w, _ in columns)
+    click.echo(header)
+    click.echo("-" * len(header))
+
+    for s in sessions:
+        row = "  ".join(
+            fmt(s.get(key, 0)).rjust(w)
+            if key not in ("session_id", "timestamp")
+            else fmt(s.get(key, "")).ljust(w)
+            for _, key, w, fmt in columns
+        )
+        click.echo(row)
+
+    click.echo(f"\nUse 'ccx context --detail <session-id>' for per-agent breakdown.")
+
+
+def _show_context_detail(project_dir: str, session_id: str):
+    """Display per-agent context window breakdown for a single session."""
+    from ccx.context_tracker import get_context_usage
+
+    data = get_context_usage(project_dir, session_id)
+    if data.get("status") != "ok":
+        click.echo(f"Session not found: {session_id}", err=True)
+        sys.exit(1)
+
+    click.echo(f"Session: {data['session_id']}")
+    click.echo(f"Time:    {data.get('timestamp', '-')}")
+    click.echo("")
+
+    agents = data.get("agents", [])
+    if not agents:
+        click.echo("No agent data recorded.")
+        return
+
+    columns = [
+        ("Agent ID",     "agent_id",            20, lambda v: v[:20] if len(v) > 20 else v),
+        ("Type",         "agent_type",          12, lambda v: v),
+        ("Turns",        "turns",                5, lambda v: str(len(v)) if isinstance(v, list) else str(v)),
+        ("Max Fill",     "max_context_fill",    10, _format_tokens),
+        ("Avg Fill",     "avg_context_fill",    10, _format_tokens),
+        ("Final Fill",   "final_context_fill",  10, _format_tokens),
+        ("Compactions",  "compaction_count",    11, lambda v: str(v)),
+    ]
+
+    header = "  ".join(h.ljust(w) for h, _, w, _ in columns)
+    click.echo(header)
+    click.echo("-" * len(header))
+
+    for agent in agents:
+        parts = []
+        for _, key, w, fmt in columns:
+            val = agent.get(key, 0)
+            if key in ("agent_id", "agent_type"):
+                parts.append(fmt(str(val)).ljust(w))
+            else:
+                parts.append(fmt(val).rjust(w))
+        click.echo("  ".join(parts))
+
+    # Compaction detail per agent
+    has_compactions = any(a.get("compaction_points") for a in agents)
+    if has_compactions:
+        click.echo("")
+        click.echo("Compaction points:")
+        for agent in agents:
+            points = agent.get("compaction_points", [])
+            if points:
+                agent_id = agent.get("agent_id", "unknown")
+                click.echo(f"  {agent_id}: turn(s) {', '.join(str(p) for p in points)}")
+
+    # Session totals
+    click.echo("-" * len(header))
+    click.echo(
+        f"  Total: max_fill={_format_tokens(data.get('total_max_context_fill', 0))}"
+        f"  compactions={data.get('total_compaction_count', 0)}"
+    )
+
+
 def _format_tokens(value) -> str:
     """Format token count for display: 1234 -> '1,234', 1500000 -> '1.5M'."""
     if not isinstance(value, (int, float)):

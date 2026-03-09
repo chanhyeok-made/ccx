@@ -36,6 +36,25 @@ def _track_tokens(event: str, data: dict, project_dir: str, session_id: str,
         pass  # Never let token tracking break event logging
 
 
+def _track_context(event: str, data: dict, project_dir: str, session_id: str,
+                   transcript_path: str | None) -> None:
+    """Track context window usage from transcript on Stop/SubagentStop events."""
+    try:
+        from ccx.context_tracker import parse_context_usage, save_context_usage
+
+        if event == "Stop" and transcript_path:
+            context_usage = parse_context_usage(transcript_path)
+            save_context_usage(project_dir, session_id, context_usage)
+
+        elif event == "SubagentStop":
+            agent_transcript = data.get("agent_transcript_path")
+            if agent_transcript:
+                context_usage = parse_context_usage(agent_transcript)
+                save_context_usage(project_dir, session_id, context_usage)
+    except Exception:
+        pass  # Never let context tracking break event logging
+
+
 def main():
     raw = sys.stdin.read()
     if not raw.strip():
@@ -71,6 +90,9 @@ def main():
 
     # Track token usage on session/subagent completion
     _track_tokens(event, data, project_dir, session_id, transcript_path)
+
+    # Track context window usage on session/subagent completion
+    _track_context(event, data, project_dir, session_id, transcript_path)
 
 
 if __name__ == "__main__":

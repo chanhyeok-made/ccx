@@ -17,6 +17,10 @@ from ccx.token_tracker import (
     get_session_usage as _get_session_usage,
     list_session_usages as _list_session_usages,
 )
+from ccx.context_tracker import (
+    get_context_usage as _get_context_usage,
+    list_context_usages as _list_context_usages,
+)
 from ccx.analysis_cache import (
     get_analysis_cache as _get_cache,
     save_analysis_cache as _save_cache,
@@ -140,6 +144,25 @@ def get_token_usage(project_dir: str, session_id: str = "") -> dict:
     if session_id:
         return _get_session_usage(project_dir, session_id)
     return _list_session_usages(project_dir)
+
+
+@mcp.tool()
+def get_context_usage(project_dir: str, session_id: str = "") -> dict:
+    """Get context window usage statistics for a session or list recent sessions.
+
+    Tracks per-turn context fill (input + cache tokens), max/avg fill rates,
+    and compaction events where context was compressed.
+
+    Args:
+        project_dir: Project root directory path.
+        session_id: Specific session ID. Empty string lists recent sessions.
+
+    Returns:
+        Dict with context usage details or list of recent sessions.
+    """
+    if session_id:
+        return _get_context_usage(project_dir, session_id)
+    return _list_context_usages(project_dir)
 
 
 @mcp.tool()
