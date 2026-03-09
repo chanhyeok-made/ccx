@@ -167,6 +167,68 @@ def _parse_all_entries(transcript_path: Path | str) -> list[dict]:
     return entries
 
 
+def get_recent_conversation_text(
+    transcript_path: Path | str,
+    max_chars: int = 50_000,
+) -> str:
+    """Extract recent conversation text from a transcript JSONL file.
+
+    Collects ``text`` content blocks from *assistant* and *user* entries
+    in reverse chronological order until *max_chars* is reached, then
+    returns them re-ordered chronologically.
+
+    Returns an empty string if the transcript is empty or unreadable.
+    """
+    entries = _parse_all_entries(transcript_path)
+    if not entries:
+        return ""
+
+    # Walk backwards, collecting text blocks until we hit the char budget.
+    fragments: list[str] = []
+    total = 0
+
+    for entry in reversed(entries):
+        entry_type = entry.get("type", "")
+        if entry_type not in ("assistant", "user"):
+            continue
+
+        content = entry.get("message", {}).get("content", [])
+        if isinstance(content, str):
+            content = [{"type": "text", "text": content}]
+        if not isinstance(content, list):
+            continue
+
+        entry_texts: list[str] = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text = block.get("text", "")
+                if text:
+                    entry_texts.append(text)
+            elif isinstance(block, str):
+                entry_texts.append(block)
+
+        if not entry_texts:
+            continue
+
+        combined = "\n".join(entry_texts)
+        if total + len(combined) > max_chars:
+            remaining = max_chars - total
+            if remaining > 0:
+                fragments.append(combined[:remaining])
+                total += remaining
+            break
+
+        fragments.append(combined)
+        total += len(combined)
+
+    if not fragments:
+        return ""
+
+    # Reverse to restore chronological order.
+    fragments.reverse()
+    return "\n\n".join(fragments)
+
+
 def _extract_changed_files(entries: list[dict]) -> list[str]:
     """Extract unique file paths from tool_use content blocks.
 

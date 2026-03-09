@@ -151,29 +151,23 @@ def _monitor_context(project_dir: str, session_id: str,
         return None
 
     # 3. Check context fill via compactor
-    from ccx.compactor import check_context_fill, run_compaction
+    from ccx.compactor import check_context_fill
 
     fill_pct, _ = check_context_fill(transcript_path)
     if fill_pct <= 0.5:
         _save_monitor_state(state, project_dir)
         return None
 
-    # 4. Threshold exceeded — run compaction and warn
-    summary = run_compaction(transcript_path, project_dir,
-                             session_id=session_id)
+    # 4. Threshold exceeded — instruct agent to run compact skill
     state["already_warned"] = True
     _save_monitor_state(state, project_dir)
-
-    summary_path = os.path.join(project_dir, ".ccx",
-                                "compaction-summary.json")
 
     return {
         "decision": "block",
         "reason": (
             f"Context usage exceeded 50% ({fill_pct:.0%}). "
-            f"Key information has been saved to {summary_path}. "
-            "Starting a new session will auto-load the previous context. "
-            "Please run /compact or start a new conversation."
+            f"Please run /ccx:compact {transcript_path} to save a context summary "
+            f"before starting a new session."
         ),
     }
 
