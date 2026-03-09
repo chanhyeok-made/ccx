@@ -173,6 +173,154 @@ def index(project_dir: str, reset: bool, verbose: bool):
     click.echo("\nDone. Run '/ccx:run' or '/ccx:analyze' to trigger code-level analysis.")
 
 
+@cli.command()
+@click.argument("project_dir", default=".", type=click.Path(exists=True))
+@click.option("--limit", "-n", default=10, show_default=True, help="Number of recent sessions to show")
+@click.option("--detail", "-d", default=None, help="Show per-agent breakdown for a session ID")
+def usage(project_dir: str, limit: int, detail: str):
+    """Show token usage statistics for recent sessions."""
+    from ccx.token_tracker import list_session_usages
+
+    project = Path(project_dir).resolve()
+    ccx_dir = project / ".ccx"
+
+    if not ccx_dir.exists():
+        click.echo("Error: ccx is not initialized. Run 'ccx init' first.", err=True)
+        sys.exit(1)
+
+    if detail:
+        _show_session_detail(str(project), detail)
+        return
+
+    result = list_session_usages(str(project), limit=limit)
+    sessions = result.get("sessions", [])
+
+    if not sessions:
+        click.echo("No token usage data found.")
+        click.echo("Usage data is recorded automatically during /ccx:run sessions.")
+        return
+
+    click.echo(f"Token usage for: {project}")
+    click.echo(f"Showing {len(sessions)} most recent session(s)\n")
+
+    # Column definitions: (header, key, width, formatter)
+    columns = [
+        ("Session ID",    "session_id",    12, lambda v: v[:12] if len(v) > 12 else v),
+        ("Timestamp",     "timestamp",     19, lambda v: v[:19].replace("T", " ") if v else "-"),
+        ("Agents",        "agent_count",    6, lambda v: str(v)),
+        ("Input",         "total_input_tokens",         10, _format_tokens),
+        ("Cache Create",  "total_cache_creation_input_tokens", 13, _format_tokens),
+        ("Cache Read",    "total_cache_read_input_tokens",     10, _format_tokens),
+        ("Output",        "total_output_tokens",        10, _format_tokens),
+        ("Total",         "total_tokens",               10, _format_tokens),
+    ]
+
+    # Header
+    header = "  ".join(h.ljust(w) for h, _, w, _ in columns)
+    click.echo(header)
+    click.echo("-" * len(header))
+
+    # Rows
+    for s in sessions:
+        row = "  ".join(
+            fmt(s.get(key, 0)).rjust(w) if key != "session_id" and key != "timestamp" else fmt(s.get(key, "")).ljust(w)
+            for _, key, w, fmt in columns
+        )
+        click.echo(row)
+
+    # Grand totals
+    click.echo("-" * len(header))
+    totals = {
+        "total_input_tokens": sum(s.get("total_input_tokens", 0) for s in sessions),
+        "total_cache_creation_input_tokens": sum(s.get("total_cache_creation_input_tokens", 0) for s in sessions),
+        "total_cache_read_input_tokens": sum(s.get("total_cache_read_input_tokens", 0) for s in sessions),
+        "total_output_tokens": sum(s.get("total_output_tokens", 0) for s in sessions),
+        "total_tokens": sum(s.get("total_tokens", 0) for s in sessions),
+    }
+    total_row_parts = []
+    for h, key, w, fmt in columns:
+        if key == "session_id":
+            total_row_parts.append("TOTAL".ljust(w))
+        elif key == "timestamp":
+            total_row_parts.append("".ljust(w))
+        elif key == "agent_count":
+            total_row_parts.append("".rjust(w))
+        else:
+            total_row_parts.append(fmt(totals.get(key, 0)).rjust(w))
+    click.echo("  ".join(total_row_parts))
+
+    click.echo(f"\nUse 'ccx usage --detail <session-id>' for per-agent breakdown.")
+
+
+def _show_session_detail(project_dir: str, session_id: str):
+    """Display per-agent token breakdown for a single session."""
+    from ccx.token_tracker import get_session_usage
+
+    data = get_session_usage(project_dir, session_id)
+    if data.get("status") != "ok":
+        click.echo(f"Session not found: {session_id}", err=True)
+        sys.exit(1)
+
+    click.echo(f"Session: {data['session_id']}")
+    click.echo(f"Time:    {data.get('timestamp', '-')}")
+    click.echo("")
+
+    agents = data.get("agents", [])
+    if not agents:
+        click.echo("No agent data recorded.")
+        return
+
+    # Agent table
+    columns = [
+        ("Agent ID",       "agent_id",                    20, lambda v: v[:20] if len(v) > 20 else v),
+        ("Type",           "agent_type",                  12, lambda v: v),
+        ("Turns",          "turn_count",                   5, lambda v: str(v)),
+        ("Input",          "input_tokens",                10, _format_tokens),
+        ("Cache Create",   "cache_creation_input_tokens", 13, _format_tokens),
+        ("Cache Read",     "cache_read_input_tokens",     10, _format_tokens),
+        ("Output",         "output_tokens",               10, _format_tokens),
+        ("Total",          "total_tokens",                10, _format_tokens),
+    ]
+
+    header = "  ".join(h.ljust(w) for h, _, w, _ in columns)
+    click.echo(header)
+    click.echo("-" * len(header))
+
+    for agent in agents:
+        parts = []
+        for _, key, w, fmt in columns:
+            val = agent.get(key, 0)
+            if key in ("agent_id", "agent_type"):
+                parts.append(fmt(str(val)).ljust(w))
+            else:
+                parts.append(fmt(val).rjust(w))
+        click.echo("  ".join(parts))
+
+    # Session totals
+    click.echo("-" * len(header))
+    click.echo(
+        f"  Total: input={_format_tokens(data.get('total_input_tokens', 0))}"
+        f"  cache_create={_format_tokens(data.get('total_cache_creation_input_tokens', 0))}"
+        f"  cache_read={_format_tokens(data.get('total_cache_read_input_tokens', 0))}"
+        f"  output={_format_tokens(data.get('total_output_tokens', 0))}"
+        f"  total={_format_tokens(data.get('total_tokens', 0))}"
+    )
+
+
+def _format_tokens(value) -> str:
+    """Format token count for display: 1234 -> '1,234', 1500000 -> '1.5M'."""
+    if not isinstance(value, (int, float)):
+        return str(value)
+    n = int(value)
+    if n == 0:
+        return "0"
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 10_000:
+        return f"{n / 1_000:.1f}K"
+    return f"{n:,}"
+
+
 def _ensure_ccx_directory(project: Path):
     """Ensure .ccx/ and .ccx/logs/ directories exist."""
     ccx_dir = project / ".ccx"

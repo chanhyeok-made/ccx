@@ -13,6 +13,10 @@ from ccx.agent_config import (
     delete_agent_config as _delete_agent_config,
     list_agent_configs as _list_agent_configs,
 )
+from ccx.token_tracker import (
+    get_session_usage as _get_session_usage,
+    list_session_usages as _list_session_usages,
+)
 from ccx.analysis_cache import (
     get_analysis_cache as _get_cache,
     save_analysis_cache as _save_cache,
@@ -117,6 +121,25 @@ def record_execution(
         changes=changes,
     )
     return {"status": "recorded", "record": record}
+
+
+@mcp.tool()
+def get_token_usage(project_dir: str, session_id: str = "") -> dict:
+    """Get token usage statistics for a session or list recent sessions.
+
+    If session_id is provided, returns detailed per-agent token breakdown.
+    If session_id is empty, returns summary of recent sessions.
+
+    Args:
+        project_dir: Project root directory path.
+        session_id: Specific session ID. Empty string lists recent sessions.
+
+    Returns:
+        Dict with session token usage details or list of recent sessions.
+    """
+    if session_id:
+        return _get_session_usage(project_dir, session_id)
+    return _list_session_usages(project_dir)
 
 
 @mcp.tool()

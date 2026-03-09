@@ -13,6 +13,28 @@ import os
 import sys
 from datetime import datetime, timezone
 
+# Allow importing ccx package when running as a standalone hook script
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+
+def _track_tokens(event: str, data: dict, project_dir: str, session_id: str,
+                  transcript_path: str | None) -> None:
+    """Aggregate token usage from transcript on Stop/SubagentStop events."""
+    try:
+        from ccx.token_tracker import parse_transcript, save_agent_usage
+
+        if event == "Stop" and transcript_path:
+            agent_usage = parse_transcript(transcript_path)
+            save_agent_usage(project_dir, session_id, agent_usage)
+
+        elif event == "SubagentStop":
+            agent_transcript = data.get("agent_transcript_path")
+            if agent_transcript:
+                agent_usage = parse_transcript(agent_transcript)
+                save_agent_usage(project_dir, session_id, agent_usage)
+    except Exception:
+        pass  # Never let token tracking break event logging
+
 
 def main():
     raw = sys.stdin.read()
@@ -29,6 +51,9 @@ def main():
     # Add timestamp, keep all original fields
     data["timestamp"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    # Capture transcript path before stripping
+    transcript_path = data.get("transcript_path")
+
     # Strip fields that should not persist in the log
     cwd = data.pop("cwd", ".")
     data.pop("transcript_path", None)
@@ -43,6 +68,9 @@ def main():
 
     with open(log_path, "a", encoding="utf-8") as f:
         f.write(line + "\n")
+
+    # Track token usage on session/subagent completion
+    _track_tokens(event, data, project_dir, session_id, transcript_path)
 
 
 if __name__ == "__main__":
