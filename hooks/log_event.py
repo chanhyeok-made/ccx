@@ -29,8 +29,12 @@ def main():
     # Add timestamp, keep all original fields
     data["timestamp"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    # Strip fields that should not persist in the log
+    cwd = data.pop("cwd", ".")
+    data.pop("transcript_path", None)
+
     # Determine log directory
-    project_dir = os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd", ".")
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR") or cwd
     log_dir = os.path.join(project_dir, ".ccx", "logs")
     os.makedirs(log_dir, exist_ok=True)
 
