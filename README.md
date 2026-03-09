@@ -47,6 +47,8 @@ claude                        # start Claude Code
 | `ccx update [dir]` | Upgrade ccx to latest version | |
 | `ccx status [dir]` | Check installation status | |
 | `ccx index [dir]` | Index project scopes for analysis cache | `--reset`, `-v` |
+| `ccx usage [dir]` | Show token usage statistics | `-n`, `-d` |
+| `ccx context [dir]` | Show context window usage statistics | `-n`, `-d` |
 
 ## Skills
 
@@ -91,7 +93,7 @@ Claude Code (orchestrator)
 
 ## MCP Tools
 
-The MCP server exposes 20 tools:
+The MCP server exposes 22 tools:
 
 | Tool | Description |
 |------|-------------|
@@ -99,6 +101,8 @@ The MCP server exposes 20 tools:
 | `check_rules` | Check changes against project rules |
 | `get_session` | Get recent execution history |
 | `record_execution` | Record pipeline execution result |
+| `get_token_usage` | Get token usage stats for a session |
+| `get_context_usage` | Get context window usage stats for a session |
 | `get_analysis_cache` | Look up cached scope analysis |
 | `save_analysis_cache` | Save scope analysis to cache |
 | `invalidate_analysis_cache` | Invalidate cached scope analysis |
@@ -192,7 +196,9 @@ src/ccx/
     session.py                  Session persistence
     analysis_cache.py           Scope-based analysis cache
     agent_config.py             Per-agent YAML config
-    logger.py                   MCP tool call logging
+    _transcript_utils.py        Shared transcript parsing utilities
+    token_tracker.py            Token usage tracking per agent/session
+    context_tracker.py          Context window usage tracking
     base-context.example.yaml   Template for project context
 ```
 
