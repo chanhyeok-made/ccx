@@ -24,19 +24,26 @@ from ccx.session import load_session
 
 _LOG_DIR = ".ccx/logs"
 _TIMELINE_EVENTS = {"SubagentStart", "SubagentStop", "Stop", "SessionStart"}
+_TOOL_EVENTS = {"PreToolUse"}
 
 
-def _parse_event_log(log_path: str) -> list[dict]:
-    """Parse a JSONL event log and extract timeline-relevant events.
+def _parse_event_log(log_path: str) -> tuple[list[dict], list[dict]]:
+    """Parse a JSONL event log and extract timeline + tool events.
 
-    Returns a list of dicts with keys: hook_event_name, agent_id,
-    agent_type, timestamp.  Only SubagentStart, SubagentStop, Stop,
-    and SessionStart events are included.
+    Returns a tuple of (timeline_events, tool_events).
+
+    timeline_events: list of dicts with keys: hook_event_name, agent_id,
+        agent_type, timestamp.  Includes SubagentStart, SubagentStop,
+        Stop, and SessionStart events.
+
+    tool_events: list of dicts with keys: hook_event_name, tool_name,
+        timestamp.  Includes PreToolUse events.
     """
-    events: list[dict] = []
+    timeline_events: list[dict] = []
+    tool_events: list[dict] = []
     path = Path(log_path)
     if not path.exists():
-        return events
+        return timeline_events, tool_events
 
     try:
         with open(path, encoding="utf-8") as f:
@@ -50,16 +57,22 @@ def _parse_event_log(log_path: str) -> list[dict]:
                     continue
                 event_name = entry.get("hook_event_name", "")
                 if event_name in _TIMELINE_EVENTS:
-                    events.append({
+                    timeline_events.append({
                         "hook_event_name": event_name,
                         "agent_id": entry.get("agent_id"),
                         "agent_type": entry.get("agent_type"),
                         "timestamp": entry.get("timestamp", ""),
                     })
+                elif event_name in _TOOL_EVENTS:
+                    tool_events.append({
+                        "hook_event_name": event_name,
+                        "tool_name": entry.get("tool_name", "unknown"),
+                        "timestamp": entry.get("timestamp", ""),
+                    })
     except OSError:
         pass
 
-    return events
+    return timeline_events, tool_events
 
 
 def _parse_iso(ts: str) -> datetime | None:
@@ -178,16 +191,18 @@ def aggregate_data(project_dir: str, limit: int = 50) -> dict:
         if detail.get("status") == "ok":
             context_details[sid] = detail
 
-    # --- Event logs → timelines ---
+    # --- Event logs → timelines + tool usage ---
     log_dir = Path(project_dir) / _LOG_DIR
     timelines: dict[str, list[dict]] = {}
     session_starts: dict[str, str] = {}  # session_id -> model
+    session_tool_usage: dict[str, dict[str, int]] = {}  # session_id -> {tool_name: count}
+    session_time_ranges: dict[str, tuple[str, str]] = {}  # session_id -> (first_ts, last_ts)
     if log_dir.exists():
         for fp in log_dir.glob("*.jsonl"):
             sid = fp.stem
             if sid in ("hook_errors", "schema_violations"):
                 continue
-            events = _parse_event_log(str(fp))
+            events, tool_events = _parse_event_log(str(fp))
             timeline = _build_agent_timeline(events)
             if timeline:
                 timelines[sid] = timeline
@@ -195,6 +210,28 @@ def aggregate_data(project_dir: str, limit: int = 50) -> dict:
             for evt in events:
                 if evt["hook_event_name"] == "SessionStart":
                     session_starts[sid] = evt.get("timestamp", "")
+
+            # Tool usage aggregation per session
+            if tool_events:
+                tool_counts: dict[str, int] = {}
+                for te in tool_events:
+                    tn = te.get("tool_name", "unknown")
+                    tool_counts[tn] = tool_counts.get(tn, 0) + 1
+                session_tool_usage[sid] = tool_counts
+
+            # Compute session time range from all events (timeline + tool)
+            all_timestamps: list[str] = []
+            for evt in events:
+                ts = evt.get("timestamp", "")
+                if ts:
+                    all_timestamps.append(ts)
+            for te in tool_events:
+                ts = te.get("timestamp", "")
+                if ts:
+                    all_timestamps.append(ts)
+            if all_timestamps:
+                all_timestamps.sort()
+                session_time_ranges[sid] = (all_timestamps[0], all_timestamps[-1])
 
     # --- Execution history ---
     history = load_session(project_dir, limit=limit)
@@ -361,6 +398,8 @@ def aggregate_data(project_dir: str, limit: int = 50) -> dict:
         },
         "history": history,
         "sessions": sessions_merged,
+        "session_tool_usage": session_tool_usage,
+        "session_time_ranges": session_time_ranges,
     }
 
 
@@ -427,17 +466,60 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
     context_labels = [_format_date(s.get("timestamp", "")) for s in context_sessions]
     context_max_fills = [s.get("total_max_context_fill", 0) for s in context_sessions]
 
-    # Execution history rows (for Level 1)
+    # Execution history rows (for Level 1) — enriched with session matching
     history = data["history"]
+    session_tool_usage = data.get("session_tool_usage", {})
+    session_time_ranges = data.get("session_time_ranges", {})
+    sessions_data_for_match = data["sessions"]
+
+    # Build lookup: session_id -> session summary (tokens, context)
+    session_summary_map: dict[str, dict] = {}
+    for sm in sessions_data_for_match:
+        session_summary_map[sm["session_id"]] = sm
+
     history_rows: list[dict] = []
     if history:
         for rec in reversed(history):
+            rec_ts = rec.get("timestamp", "")
+            changes = rec.get("changes", [])
+
+            # Session matching: find session whose time range covers this record
+            matched_session_id: str | None = None
+            if rec_ts:
+                rec_dt = _parse_iso(rec_ts)
+                if rec_dt:
+                    for sid, (range_start, range_end) in session_time_ranges.items():
+                        start_dt = _parse_iso(range_start)
+                        end_dt = _parse_iso(range_end)
+                        if start_dt and end_dt and start_dt <= rec_dt <= end_dt:
+                            matched_session_id = sid
+                            break
+
+            # Tool usage from matched session
+            tool_usage: dict[str, int] = {}
+            if matched_session_id and matched_session_id in session_tool_usage:
+                tool_usage = session_tool_usage[matched_session_id]
+
+            # Token/context summary from matched session
+            session_tokens = 0
+            session_max_context = 0
+            if matched_session_id and matched_session_id in session_summary_map:
+                sm = session_summary_map[matched_session_id]
+                session_tokens = sm.get("total_tokens", 0)
+                session_max_context = sm.get("total_max_context_fill", 0)
+
             history_rows.append({
-                "timestamp": _format_date(rec.get("timestamp", "")),
+                "timestamp": _format_date(rec_ts),
                 "request": rec.get("request", "")[:120],
                 "success": rec.get("success", False),
                 "summary": rec.get("summary", rec.get("error", ""))[:200],
-                "changes_count": len(rec.get("changes", [])),
+                "changes_count": len(changes),
+                "changes": changes,
+                "error": rec.get("error", ""),
+                "matched_session_id": matched_session_id,
+                "tool_usage": tool_usage,
+                "session_tokens": session_tokens,
+                "session_max_context": session_max_context,
             })
 
     # --- Sessions data for drill-down ---
@@ -660,6 +742,96 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
     color: #aaa;
     margin-left: 6px;
   }}
+
+  /* Accordion for execution history */
+  .accordion-row {{ cursor: pointer; }}
+  .accordion-row:hover {{ background: #1e2f50; }}
+  .accordion-row td:first-child::before {{
+    content: '\u25B6';
+    display: inline-block;
+    margin-right: 6px;
+    font-size: 0.65rem;
+    transition: transform 0.2s;
+    color: #4fc3f7;
+  }}
+  .accordion-row.open td:first-child::before {{
+    transform: rotate(90deg);
+  }}
+  .accordion-panel {{ display: none; }}
+  .accordion-panel.open {{ display: table-row; }}
+  .accordion-panel td {{
+    padding: 0;
+    border-bottom: 1px solid #1a1a2e;
+  }}
+  .accordion-content {{
+    padding: 14px 20px;
+    background: #0d1525;
+    font-size: 0.82rem;
+  }}
+  .accordion-content h4 {{
+    color: #90caf9;
+    font-size: 0.8rem;
+    margin: 12px 0 6px 0;
+  }}
+  .accordion-content h4:first-child {{ margin-top: 0; }}
+  .accordion-content table {{
+    width: auto;
+    margin-bottom: 4px;
+  }}
+  .accordion-content table th {{
+    font-size: 0.75rem;
+    padding: 4px 10px;
+  }}
+  .accordion-content table td {{
+    font-size: 0.78rem;
+    padding: 4px 10px;
+    border-bottom: 1px solid #16213e;
+  }}
+  .badge.created {{ background: #2e7d32; color: #c8e6c9; }}
+  .badge.modified {{ background: #1565c0; color: #bbdefb; }}
+  .badge.deleted {{ background: #c62828; color: #ffcdd2; }}
+  .error-box {{
+    background: #c6282833;
+    color: #ffcdd2;
+    padding: 8px 12px;
+    border-radius: 6px;
+    margin-top: 8px;
+    font-size: 0.8rem;
+  }}
+  .session-link {{
+    color: #4fc3f7;
+    cursor: pointer;
+    text-decoration: none;
+    font-size: 0.8rem;
+  }}
+  .session-link:hover {{ text-decoration: underline; }}
+  .tool-list {{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }}
+  .tool-chip {{
+    display: inline-block;
+    background: #1e2f50;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    color: #ccc;
+  }}
+  .tool-chip .tool-count {{
+    color: #4fc3f7;
+    font-weight: 600;
+    margin-left: 4px;
+  }}
+  .meta-row {{
+    display: flex;
+    gap: 20px;
+    margin-top: 8px;
+    font-size: 0.78rem;
+    color: #aaa;
+  }}
+  .meta-row span {{ display: inline-flex; align-items: center; gap: 4px; }}
+  .meta-row .label {{ color: #90caf9; }}
 </style>
 </head>
 <body>
@@ -922,6 +1094,15 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
     navigate(level, sid, aid);
   }};
 
+  window._toggleHistory = function(idx) {{
+    const row = document.getElementById('hrow-' + idx);
+    const panel = document.getElementById('hpanel-' + idx);
+    if (row && panel) {{
+      row.classList.toggle('open');
+      panel.classList.toggle('open');
+    }}
+  }};
+
   // -----------------------------------------------------------------------
   // Level 1: Overview
   // -----------------------------------------------------------------------
@@ -946,22 +1127,85 @@ def generate_html(project_dir: str, limit: int = 50) -> str:
       }}).join('');
     }}
 
-    // History table
+    // History table (accordion)
     const htbody = document.getElementById('history-table-body');
     if (!ov.history || ov.history.length === 0) {{
       htbody.innerHTML = '<tr><td colspan="5" class="empty">No execution history</td></tr>';
     }} else {{
-      htbody.innerHTML = ov.history.map(r => {{
+      htbody.innerHTML = ov.history.map((r, idx) => {{
         const badge = r.success
           ? '<span class="badge success">OK</span>'
           : '<span class="badge fail">FAIL</span>';
-        return '<tr>'
+
+        // Main row (clickable accordion trigger)
+        let html = '<tr class="accordion-row" id="hrow-' + idx + '" onclick="window._toggleHistory(' + idx + ')">'
           + '<td>' + escapeHtml(r.timestamp) + '</td>'
           + '<td>' + escapeHtml(r.request) + '</td>'
           + '<td>' + badge + '</td>'
           + '<td>' + escapeHtml(r.summary) + '</td>'
           + '<td>' + (r.changes_count || 0) + '</td>'
           + '</tr>';
+
+        // Accordion panel row
+        html += '<tr class="accordion-panel" id="hpanel-' + idx + '">'
+          + '<td colspan="5"><div class="accordion-content">';
+
+        // (a) Changes table
+        const changes = r.changes || [];
+        if (changes.length > 0) {{
+          html += '<h4>Changes</h4><table><thead><tr><th>Path</th><th>Type</th><th>Intent</th></tr></thead><tbody>';
+          changes.forEach(c => {{
+            const cType = (c.type || 'modified').toLowerCase();
+            let badgeClass = 'modified';
+            if (cType === 'created' || cType === 'create') badgeClass = 'created';
+            else if (cType === 'deleted' || cType === 'delete') badgeClass = 'deleted';
+            html += '<tr>'
+              + '<td><code>' + escapeHtml(c.path || '') + '</code></td>'
+              + '<td><span class="badge ' + badgeClass + '">' + escapeHtml(cType) + '</span></td>'
+              + '<td>' + escapeHtml(c.intent || '') + '</td>'
+              + '</tr>';
+          }});
+          html += '</tbody></table>';
+        }} else {{
+          html += '<h4>Changes</h4><span style="color:#666;font-style:italic">No file changes</span>';
+        }}
+
+        // (b) Tool Usage
+        const toolUsage = r.tool_usage || {{}};
+        const toolEntries = Object.entries(toolUsage).sort((a, b) => b[1] - a[1]);
+        if (toolEntries.length > 0) {{
+          html += '<h4>Tool Usage</h4><div class="tool-list">';
+          const topTools = toolEntries.slice(0, 10);
+          topTools.forEach(([name, count]) => {{
+            html += '<span class="tool-chip">' + escapeHtml(name) + '<span class="tool-count">' + count + '</span></span>';
+          }});
+          if (toolEntries.length > 10) {{
+            const remaining = toolEntries.length - 10;
+            html += '<span class="tool-chip" style="color:#666">+' + remaining + ' more</span>';
+          }}
+          html += '</div>';
+        }}
+
+        // (c) Session link + (d) Token/Context summary
+        if (r.matched_session_id) {{
+          html += '<div class="meta-row">';
+          html += '<span><span class="label">Session:</span> <a class="session-link" onclick="event.stopPropagation();window._nav(2,\\'' + r.matched_session_id + '\\')">' + r.matched_session_id.slice(0, 8) + '... &rarr;</a></span>';
+          if (r.session_tokens) {{
+            html += '<span><span class="label">Tokens:</span> ' + fmtNum(r.session_tokens) + '</span>';
+          }}
+          if (r.session_max_context) {{
+            html += '<span><span class="label">Max Context:</span> ' + fmtNum(r.session_max_context) + '</span>';
+          }}
+          html += '</div>';
+        }}
+
+        // (e) Error
+        if (r.error) {{
+          html += '<div class="error-box">' + escapeHtml(r.error) + '</div>';
+        }}
+
+        html += '</div></td></tr>';
+        return html;
       }}).join('');
     }}
 
