@@ -3,8 +3,11 @@ MCP Server for ccx.
 Provides project context and session management tools to Claude Code.
 """
 
+from dataclasses import asdict
+
 from mcp.server.fastmcp import FastMCP
 
+from ccx.compactor import load_compaction_summary
 from ccx.config import load_base_context
 from ccx.session import load_session, save_record, get_context_summary
 from ccx.agent_config import (
@@ -94,9 +97,14 @@ def get_session(project_dir: str, limit: int = 10) -> dict:
     """
     records = load_session(project_dir, limit=limit)
     summary = get_context_summary(project_dir)
+
+    # Load compaction summary if available
+    compaction = load_compaction_summary(project_dir)
+
     return {
         "records": records,
         "context_summary": summary,
+        "compaction_summary": asdict(compaction) if compaction else None,
     }
 
 

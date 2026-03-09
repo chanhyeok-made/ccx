@@ -5,6 +5,9 @@ Claude Code hook handler: log all events to JSONL.
 Reads JSON from stdin, adds a timestamp, and appends the full payload
 as a single JSONL line to .ccx/logs/{session_id}.jsonl.
 
+On PostToolUse events, periodically checks context fill level and returns
+a block decision when the context window exceeds 50 %.
+
 Always exits 0 to never block Claude Code.
 """
 
@@ -16,6 +19,9 @@ from datetime import datetime, timezone
 
 # Allow importing ccx package when running as a standalone hook script
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+# Throttle: only check context fill every N PostToolUse events
+_MONITOR_CHECK_INTERVAL = 10
 
 
 def _log_error(project_dir: str, source: str, event: str | None,
@@ -83,6 +89,95 @@ def _track_context(event: str, data: dict, project_dir: str, session_id: str,
         _log_error(project_dir, "_track_context", event, session_id, e)
 
 
+def _monitor_state_path(project_dir: str) -> str:
+    """Return the path to .ccx/context-monitor-state.json."""
+    return os.path.join(project_dir, ".ccx", "context-monitor-state.json")
+
+
+def _load_monitor_state(project_dir: str, session_id: str) -> dict:
+    """Load the context monitor state for a session.
+
+    Returns a dict with ``call_count`` and ``already_warned`` fields.
+    If the state file does not exist or the session_id differs, returns
+    a fresh state.
+    """
+    path = _monitor_state_path(project_dir)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            state = json.loads(f.read())
+        if state.get("session_id") != session_id:
+            return {"session_id": session_id, "call_count": 0,
+                    "already_warned": False}
+        return state
+    except (OSError, json.JSONDecodeError, KeyError):
+        return {"session_id": session_id, "call_count": 0,
+                "already_warned": False}
+
+
+def _save_monitor_state(state: dict, project_dir: str) -> None:
+    """Persist the context monitor state to disk."""
+    ccx_dir = os.path.join(project_dir, ".ccx")
+    os.makedirs(ccx_dir, exist_ok=True)
+    path = _monitor_state_path(project_dir)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(state, ensure_ascii=False))
+
+
+def _monitor_context(project_dir: str, session_id: str,
+                     transcript_path: str) -> dict | None:
+    """Check context fill on every Nth PostToolUse event.
+
+    Uses a counter-based throttle so that the (relatively expensive)
+    transcript parse only runs every ``_MONITOR_CHECK_INTERVAL`` calls.
+    Once a warning has been issued for a session it is not repeated.
+
+    Returns a ``{"decision": "block", "reason": "..."}`` dict when the
+    context window fill exceeds 50 %, or ``None`` otherwise.
+    """
+    if not transcript_path:
+        return None
+
+    # 1. Throttle: bump counter, skip unless it's the Nth call
+    state = _load_monitor_state(project_dir, session_id)
+    state["call_count"] += 1
+
+    if state["call_count"] % _MONITOR_CHECK_INTERVAL != 0:
+        _save_monitor_state(state, project_dir)
+        return None
+
+    # 2. Already warned for this session — no repeat
+    if state.get("already_warned"):
+        _save_monitor_state(state, project_dir)
+        return None
+
+    # 3. Check context fill via compactor
+    from ccx.compactor import check_context_fill, run_compaction
+
+    fill_pct, _ = check_context_fill(transcript_path)
+    if fill_pct <= 0.5:
+        _save_monitor_state(state, project_dir)
+        return None
+
+    # 4. Threshold exceeded — run compaction and warn
+    summary = run_compaction(transcript_path, project_dir,
+                             session_id=session_id)
+    state["already_warned"] = True
+    _save_monitor_state(state, project_dir)
+
+    summary_path = os.path.join(project_dir, ".ccx",
+                                "compaction-summary.json")
+
+    return {
+        "decision": "block",
+        "reason": (
+            f"Context usage exceeded 50% ({fill_pct:.0%}). "
+            f"Key information has been saved to {summary_path}. "
+            "Starting a new session will auto-load the previous context. "
+            "Please run /compact or start a new conversation."
+        ),
+    }
+
+
 def main():
     raw = sys.stdin.read()
     if not raw.strip():
@@ -121,6 +216,17 @@ def main():
 
     # Track context window usage on session/subagent completion
     _track_context(event, data, project_dir, session_id, transcript_path)
+
+    # Monitor context fill on PostToolUse (throttled)
+    if event == "PostToolUse":
+        try:
+            result = _monitor_context(project_dir, session_id,
+                                      transcript_path)
+            if result:
+                print(json.dumps(result, ensure_ascii=False))
+                return
+        except Exception as e:
+            _log_error(project_dir, "_monitor_context", event, session_id, e)
 
 
 if __name__ == "__main__":
