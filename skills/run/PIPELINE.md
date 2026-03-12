@@ -35,6 +35,18 @@ round > 3 → CHECKPOINT("3회 시도 후에도 추가 맥락이 필요합니다
 
 ---
 
+## [Phase 0/4] Worktree Setup
+
+Create an isolated git worktree for this session to enable concurrent work on the same project from multiple Claude sessions.
+
+1. Call `EnterWorktree` to create a worktree. This changes the session's working directory to the worktree path.
+2. After setup, use the new working directory as `project_dir` for all subsequent phases and subagent launches.
+3. All MCP tool calls, git operations, and `.ccx/` storage operate within the worktree, isolated from the main repository.
+
+This step is automatic and requires no user interaction.
+
+---
+
 ## [Phase 1/4] Adaptive Plan
 
 Launch `ccx:planner` Agent:
@@ -96,14 +108,14 @@ After approval, call `mcp__ccx__mark_stale_cascade` for affected scopes. Mark do
 
 ---
 
-## [Phase 3/4] Commit & Push
+## [Phase 3/4] Commit & Create PR
 
 1. Run `git diff --stat`
 2. Generate Conventional Commits message: `type(scope): description` + body
 
->>> CHECKPOINT("이 메시지로 커밋할까요?\n\n{commit_message}", "커밋 확인", ["Commit & Push", "Edit message", "Skip commit"])
+>>> CHECKPOINT("이 메시지로 커밋할까요?\n\n{commit_message}", "커밋 확인", ["Commit & Create PR", "Edit message", "Skip commit"])
 
-3. If confirmed, stage + commit + push.
+3. If confirmed, stage + commit + push the worktree branch, then create a pull request targeting the main branch.
 
 ---
 

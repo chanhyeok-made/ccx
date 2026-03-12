@@ -82,6 +82,15 @@ Subagents may launch further subagents via the Agent tool, subject to these cons
 - **Depth guard:** If `current_depth >= 2`, the subagent MUST NOT invoke the Agent tool. Perform the work directly instead.
 - **Required context forwarding:** Every Agent invocation MUST include the original `project_dir` and the incremented `current_depth` in the launch prompt. Omitting either is a protocol violation.
 
+## Worktree Environment
+
+When the orchestrator uses `EnterWorktree`, `project_dir` becomes the worktree path instead of the original repository path. All subagents MUST:
+
+- Use the `project_dir` received from the orchestrator as-is (do NOT attempt to resolve to the original repo path)
+- All MCP tool calls with `project_dir` parameter use the worktree path
+- Git operations work transparently in worktrees — no special handling needed
+- `.ccx/` storage (cache, session, agent config) is isolated per worktree by design
+
 ## Background Subagent
 
 A subagent launched with `run_in_background: true` via the Agent tool follows special rules:

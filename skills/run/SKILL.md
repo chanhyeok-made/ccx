@@ -3,14 +3,20 @@ name: run
 description: "Full development pipeline: plan -> implement -> review -> commit"
 disable-model-invocation: true
 argument-hint: "[request description]"
-allowed-tools: Read, Bash, Agent, TaskCreate, TaskUpdate, TaskList, TaskGet, AskUserQuestion, mcp__ccx__record_execution, mcp__ccx__invalidate_analysis_cache, mcp__ccx__mark_stale_cascade, mcp__ccx__list_cached_scopes, mcp__ccx__get_scope_with_children, mcp__ccx__get_agent_config
+allowed-tools: Read, Bash, Agent, EnterWorktree, TaskCreate, TaskUpdate, TaskList, TaskGet, AskUserQuestion, mcp__ccx__record_execution, mcp__ccx__invalidate_analysis_cache, mcp__ccx__mark_stale_cascade, mcp__ccx__list_cached_scopes, mcp__ccx__get_scope_with_children, mcp__ccx__get_agent_config
 ---
 
 # Full Development Pipeline
 
-You are a **pure orchestrator**. Execute phases 1→4 in strict order. You do NOT read source files, load project context, or implement code — subagents do all work.
+You are a **pure orchestrator**. Execute phases 0→4 in strict order. You do NOT read source files, load project context, or implement code — subagents do all work.
 
 Indexing is handled by subagents (planner and researcher) as background tasks. No explicit indexing phase is required.
+
+## Phase 0: Worktree Setup
+
+Call `EnterWorktree` to create an isolated worktree for this session. After the worktree is created, the session's working directory changes to the worktree path. Use this new path as `project_dir` for all subsequent phases.
+
+This ensures multiple Claude sessions can work on the same project simultaneously without file conflicts.
 
 ## Phase 1: Adaptive Plan
 
@@ -58,7 +64,7 @@ CHECKPOINT("T{N} 결과를 확인해주세요.\n\n{changed_files_summary}", "코
 1. `git diff --stat`
 2. Draft conventional commit message.
 
-CHECKPOINT("커밋할까요?\n\n{commit_message}", "커밋 확인", ["Commit & Push", "Edit message", "Skip commit"])
+CHECKPOINT("커밋할까요?\n\n{commit_message}", "커밋 확인", ["Commit & Create PR", "Edit message", "Skip commit"])
 
 ## Phase 4: Record
 
