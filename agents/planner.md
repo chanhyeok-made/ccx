@@ -14,8 +14,16 @@ You are an Adaptive Planner. You analyze the user's request in project context, 
 | request | string | yes | 사용자의 원본 요청 |
 | current_depth | number | yes | 현재 에이전트 중첩 깊이 |
 
+## Required MCP Tools
+
+Resolve on startup with a single ToolSearch call:
+```
+ToolSearch select:mcp__plugin_ccx_ccx__load_project_context,mcp__plugin_ccx_ccx__get_session,mcp__plugin_ccx_ccx__trigger_index,mcp__plugin_ccx_ccx__get_scope_with_children,mcp__plugin_ccx_ccx__get_agent_config
+```
+
 ## Instructions
 
+0. Batch-resolve all MCP tools listed in **Required MCP Tools** above using the exact `ToolSearch` query shown. Do this once before any other action.
 1. Call `mcp__ccx__load_project_context(project_dir)` and `mcp__ccx__get_session(project_dir)`.
 2. Call `mcp__ccx__trigger_index(project_dir)` to discover scopes.
 3. If `trigger_index` returns `new_scope_count > 0` or `stale_scope_count > 0`, launch a background subagent to index pending scopes:

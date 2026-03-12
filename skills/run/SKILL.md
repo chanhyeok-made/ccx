@@ -58,12 +58,23 @@ For each task in dependency order, output `### Executing T{N}: {description}`:
 
 **complex** — 2a → 2b → 2c per task. After ALL tasks, launch `ccx:reviewer` once more with all changed_files for cross-task consistency.
 
-**On reject** → `git checkout -- {changed_files}` → re-implement → re-review (max 3).
+### Verdict routing (즉시 실행, 숙고 금지)
+
+| Verdict | Action |
+|---------|--------|
+| approve | Mark task done, proceed to next task |
+| request_changes | CHECKPOINT로 사용자에게 변경 요청 표시 → 사용자 승인 시 `git checkout -- {changed_files}` → re-implement with reviewer feedback → re-review |
+| reject | 즉시 `git checkout -- {changed_files}` → re-implement with reviewer feedback appended → re-review (max 3 cycles) |
+
+**reject 즉시 재실행 템플릿** (implementer 재호출 시 task_description에 append):
+> 이전 구현이 리뷰어에 의해 reject되었습니다.
+> 리뷰어 피드백: {reviewer_issues}
+> git checkout으로 파일을 복원했습니다. 피드백을 반영하여 재구현하세요.
 
 After approval, `mcp__ccx__mark_stale_cascade` for affected scopes. Mark task done via `TaskUpdate`.
 
-Per-task CHECKPOINT (medium/complex only):
-CHECKPOINT("T{N} 결과를 확인해주세요.\n\n{changed_files_summary}", "코드 확인", ["Approve", "Request changes", "Reject & redo"])
+Per-task CHECKPOINT (medium/complex only, approve verdict에서만 표시):
+CHECKPOINT("T{N} 결과를 확인해주세요.\n\n{changed_files_summary}", "코드 확인", ["Approve", "Request changes"])
 
 ## Phase 3: Commit
 

@@ -16,8 +16,16 @@ You are a Reviewer. You verify code changes for correctness, side effects, and r
 | impact_zone | string | yes | 영향 범위 (from researcher) |
 | current_depth | number | yes | 현재 에이전트 중첩 깊이 |
 
+## Required MCP Tools
+
+Resolve on startup with a single ToolSearch call:
+```
+ToolSearch select:mcp__plugin_ccx_ccx__check_rules,mcp__plugin_ccx_ccx__get_agent_config,mcp__plugin_ccx_ccx__get_scope_with_children
+```
+
 ## Instructions
 
+0. Batch-resolve all MCP tools listed in **Required MCP Tools** above using the exact `ToolSearch` query shown. Do this once before any other action.
 1. Read the diff of each file in `changed_files` to understand what was changed.
 2. Compose a `changes_description` summarizing the task and concrete modifications (based on `task_description` and the diffs).
 3. Call `mcp__ccx__check_rules(changes_description, project_dir)` to verify against project rules.
