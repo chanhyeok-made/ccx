@@ -39,9 +39,13 @@ round > 3 → CHECKPOINT("3회 시도 후에도 추가 맥락이 필요합니다
 
 Create an isolated git worktree for this session to enable concurrent work on the same project from multiple Claude sessions.
 
-1. Call `EnterWorktree` to create a worktree. This changes the session's working directory to the worktree path.
-2. After setup, use the new working directory as `project_dir` for all subsequent phases and subagent launches.
-3. All MCP tool calls, git operations, and `.ccx/` storage operate within the worktree, isolated from the main repository.
+1. **Capture current state** before creating the worktree:
+   - `original_dir` = current working directory (the original repository path)
+   - `base_branch` = `git branch --show-current` (the branch checked out in the original repo; used as the PR target in Phase 3)
+2. Call `EnterWorktree` to create a worktree. EnterWorktree creates a new branch based on the current HEAD (i.e., whatever `base_branch` points to) and sets up the worktree at a separate path. This changes the session's working directory to the worktree path.
+3. After setup, use the new working directory as `project_dir` for all subsequent phases and subagent launches.
+4. All MCP tool calls, git operations, and `.ccx/` storage operate within the worktree, isolated from the main repository.
+5. Retain `base_branch` — it is needed in Phase 3 to set the PR target.
 
 This step is automatic and requires no user interaction.
 
@@ -115,7 +119,11 @@ After approval, call `mcp__ccx__mark_stale_cascade` for affected scopes. Mark do
 
 >>> CHECKPOINT("이 메시지로 커밋할까요?\n\n{commit_message}", "커밋 확인", ["Commit & Create PR", "Edit message", "Skip commit"])
 
-3. If confirmed, stage + commit + push the worktree branch, then create a pull request targeting the main branch.
+3. If confirmed, stage + commit + push the worktree branch, then create a pull request targeting `base_branch` (captured in Phase 0). This ensures the PR targets the branch the user was on when they started the pipeline, not a hardcoded default.
+4. **Worktree cleanup** (only after successful commit & PR):
+   1. `cd {original_dir}` — return to the original repository path saved in Phase 0. This is required because a worktree cannot remove itself from within its own directory.
+   2. `git worktree remove {worktree_path}` — remove the worktree and its working directory.
+   - If the user chose **"Skip commit"**, do NOT remove the worktree. The user may want to continue working in it manually or resume later.
 
 ---
 

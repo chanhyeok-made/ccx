@@ -14,7 +14,13 @@ Indexing is handled by subagents (planner and researcher) as background tasks. N
 
 ## Phase 0: Worktree Setup
 
-Call `EnterWorktree` to create an isolated worktree for this session. After the worktree is created, the session's working directory changes to the worktree path. Use this new path as `project_dir` for all subsequent phases.
+**Before calling EnterWorktree**, capture the current state:
+- `original_dir` = current working directory (the original repository path)
+- `base_branch` = result of `git branch --show-current` (the branch to target when creating a PR later)
+
+Call `EnterWorktree` to create an isolated worktree. EnterWorktree creates a new branch based on the current HEAD (i.e., whatever branch is checked out) and sets up the worktree at a separate path. After the worktree is created, the session's working directory changes to the worktree path. Use this new path as `project_dir` for all subsequent phases.
+
+Retain `base_branch` for Phase 3 (PR target).
 
 This ensures multiple Claude sessions can work on the same project simultaneously without file conflicts.
 
@@ -65,6 +71,13 @@ CHECKPOINT("T{N} 결과를 확인해주세요.\n\n{changed_files_summary}", "코
 2. Draft conventional commit message.
 
 CHECKPOINT("커밋할까요?\n\n{commit_message}", "커밋 확인", ["Commit & Create PR", "Edit message", "Skip commit"])
+
+3. If confirmed, stage + commit + push the worktree branch, then create a pull request targeting `base_branch` (captured in Phase 0).
+4. After commit & PR succeed, cleanup the worktree:
+   1. `cd {original_dir}` (saved from Phase 0)
+   2. `git worktree remove {worktree_path}`
+
+   Skip cleanup if the user chose "Skip commit" — keep the worktree so they can continue manually.
 
 ## Phase 4: Record
 
