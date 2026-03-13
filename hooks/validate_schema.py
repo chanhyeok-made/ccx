@@ -14,6 +14,11 @@ import os
 import sys
 from datetime import datetime, timezone
 
+# Allow importing ccx package when running as a standalone hook script
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+from ccx.storage import resolve_storage_dir
+
 # Per-agent required output markers (case-insensitive search)
 AGENT_SCHEMAS = {
     "ccx:planner": {
@@ -42,7 +47,7 @@ AGENT_SCHEMAS = {
 
 def log_violation(project_dir: str, agent_type: str, missing: list[str]) -> None:
     """Append a schema violation record to .ccx/logs/schema_violations.jsonl."""
-    log_dir = os.path.join(project_dir, ".ccx", "logs")
+    log_dir = os.path.join(resolve_storage_dir(project_dir), ".ccx", "logs")
     os.makedirs(log_dir, exist_ok=True)
 
     record = {

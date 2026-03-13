@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ccx.storage import resolve_storage_dir
+
 SESSION_DIR = ".ccx"
 SESSION_FILE = "session.json"
 MAX_RECORDS = 50
@@ -26,7 +28,7 @@ class ExecutionRecord:
 
 
 def _session_path(project_dir: str) -> Path:
-    return Path(project_dir) / SESSION_DIR / SESSION_FILE
+    return Path(resolve_storage_dir(project_dir)) / SESSION_DIR / SESSION_FILE
 
 
 def load_session(project_dir: str, limit: int = 10) -> list[dict]:

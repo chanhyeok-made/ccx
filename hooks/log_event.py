@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 # Allow importing ccx package when running as a standalone hook script
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+from ccx.storage import resolve_storage_dir
+
 # Throttle: only check context fill every N PostToolUse events
 _MONITOR_CHECK_INTERVAL = 10
 
@@ -31,7 +33,8 @@ def _log_error(project_dir: str, source: str, event: str | None,
     Never raises — error logging must not break the hook.
     """
     try:
-        log_dir = os.path.join(project_dir, ".ccx", "logs")
+        storage_dir = resolve_storage_dir(project_dir)
+        log_dir = os.path.join(storage_dir, ".ccx", "logs")
         os.makedirs(log_dir, exist_ok=True)
 
         record = {
@@ -128,7 +131,7 @@ def _replace_subagent_stop(log_path: str, agent_id: str, new_line: str) -> bool:
 
 def _monitor_state_path(project_dir: str) -> str:
     """Return the path to .ccx/context-monitor-state.json."""
-    return os.path.join(project_dir, ".ccx", "context-monitor-state.json")
+    return os.path.join(resolve_storage_dir(project_dir), ".ccx", "context-monitor-state.json")
 
 
 def _load_monitor_state(project_dir: str, session_id: str) -> dict:
@@ -153,7 +156,7 @@ def _load_monitor_state(project_dir: str, session_id: str) -> dict:
 
 def _save_monitor_state(state: dict, project_dir: str) -> None:
     """Persist the context monitor state to disk."""
-    ccx_dir = os.path.join(project_dir, ".ccx")
+    ccx_dir = os.path.join(resolve_storage_dir(project_dir), ".ccx")
     os.makedirs(ccx_dir, exist_ok=True)
     path = _monitor_state_path(project_dir)
     with open(path, "w", encoding="utf-8") as f:
@@ -255,7 +258,8 @@ def main():
             except Exception as e:
                 _log_error(project_dir, "_inject_context_fill", event, session_id, e)
 
-    log_dir = os.path.join(project_dir, ".ccx", "logs")
+    storage_dir = resolve_storage_dir(project_dir)
+    log_dir = os.path.join(storage_dir, ".ccx", "logs")
     os.makedirs(log_dir, exist_ok=True)
 
     log_path = os.path.join(log_dir, f"{session_id}.jsonl")

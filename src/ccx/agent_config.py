@@ -7,6 +7,8 @@ and disabled base-context rules.
 import yaml
 from pathlib import Path
 
+from ccx.storage import resolve_storage_dir
+
 VALID_AGENTS = [
     "planner",
     "researcher",
@@ -36,7 +38,7 @@ def _validate_agent(agent_name: str) -> None:
 
 def _agent_config_path(project_dir: str, agent_name: str) -> Path:
     """Return the Path to the agent's YAML config file."""
-    return Path(project_dir) / _AGENTS_DIR / f"{agent_name}.yaml"
+    return Path(resolve_storage_dir(project_dir)) / _AGENTS_DIR / f"{agent_name}.yaml"
 
 
 def get_agent_config(project_dir: str, agent_name: str) -> dict:
