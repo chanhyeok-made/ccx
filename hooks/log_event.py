@@ -89,6 +89,43 @@ def _track_context(event: str, data: dict, project_dir: str, session_id: str,
         _log_error(project_dir, "_track_context", event, session_id, e)
 
 
+def _replace_subagent_stop(log_path: str, agent_id: str, new_line: str) -> bool:
+    """Replace an existing SubagentStop line for *agent_id* in the log file.
+
+    When validate_schema.py blocks a SubagentStop, Claude Code retries the
+    agent, producing a second SubagentStop for the same agent_id.  Without
+    deduplication the log would contain 1 start and 2 stops.
+
+    This function scans the JSONL file for an existing SubagentStop entry
+    with a matching ``agent_id`` and replaces it in-place with *new_line*.
+    Returns ``True`` if a replacement was made, ``False`` otherwise (caller
+    should append normally).
+    """
+    try:
+        with open(log_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        return False
+
+    replaced = False
+    for i, existing_line in enumerate(lines):
+        try:
+            entry = json.loads(existing_line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if (entry.get("hook_event_name") == "SubagentStop"
+                and entry.get("agent_id") == agent_id):
+            lines[i] = new_line + "\n"
+            replaced = True
+            break
+
+    if replaced:
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+
+    return replaced
+
+
 def _monitor_state_path(project_dir: str) -> str:
     """Return the path to .ccx/context-monitor-state.json."""
     return os.path.join(project_dir, ".ccx", "context-monitor-state.json")
@@ -196,14 +233,44 @@ def main():
 
     # Determine log directory
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR") or cwd
+
+    # Inject token usage data into SubagentStop events before serialization
+    if event == "SubagentStop":
+        agent_transcript = data.get("agent_transcript_path")
+        data["input_tokens"] = None
+        data["output_tokens"] = None
+        data["context_fill_pct"] = None
+        if agent_transcript:
+            try:
+                from ccx.token_tracker import parse_transcript
+                agent_usage = parse_transcript(agent_transcript)
+                data["input_tokens"] = agent_usage.input_tokens
+                data["output_tokens"] = agent_usage.output_tokens
+            except Exception as e:
+                _log_error(project_dir, "_inject_tokens", event, session_id, e)
+            try:
+                from ccx.compactor import check_context_fill
+                fill_pct, _ = check_context_fill(agent_transcript)
+                data["context_fill_pct"] = round(fill_pct, 4)
+            except Exception as e:
+                _log_error(project_dir, "_inject_context_fill", event, session_id, e)
+
     log_dir = os.path.join(project_dir, ".ccx", "logs")
     os.makedirs(log_dir, exist_ok=True)
 
     log_path = os.path.join(log_dir, f"{session_id}.jsonl")
     line = json.dumps(data, ensure_ascii=False)
 
-    with open(log_path, "a", encoding="utf-8") as f:
-        f.write(line + "\n")
+    # SubagentStop dedup: replace existing stop for same agent_id so that
+    # schema-violation retries don't produce 1-start-2-stop pairs.
+    if event == "SubagentStop":
+        agent_id = data.get("agent_id")
+        if not agent_id or not _replace_subagent_stop(log_path, agent_id, line):
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+    else:
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
 
     # Track token usage on session/subagent completion
     _track_tokens(event, data, project_dir, session_id, transcript_path)

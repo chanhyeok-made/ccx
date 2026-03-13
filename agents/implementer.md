@@ -29,6 +29,16 @@ You are an Implementer. You implement a specific task by reading and modifying c
 |-------|------|----------|----------|-------------|
 | changed_files | list[string] | yes | → reviewer.changed_files | 변경된 파일 목록 (path (type): intent) |
 
+## Output Example
+
+```
+=== STATUS: COMPLETE ===
+Changed files:
+- /absolute/path/to/file.py (modified): Brief description of what changed
+- /absolute/path/to/new_file.py (created): Brief description of why it was created
+=== END ===
+```
+
 ## Rollback Protocol
 
 If the orchestrator re-launches you after a reviewer reject, your first step MUST be `git checkout -- {files}` to restore pre-implementation state before re-attempting.

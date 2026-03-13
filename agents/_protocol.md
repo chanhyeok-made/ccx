@@ -100,6 +100,10 @@ A subagent launched with `run_in_background: true` via the Agent tool follows sp
 - **Fire-and-forget semantics:** The caller does NOT wait for the background subagent's result. It proceeds with its own pipeline immediately after launch. Do not reference or depend on the background subagent's output in subsequent steps.
 - **Failure isolation:** A background subagent's failure (error, timeout, or `NEEDS_CONTEXT` response) MUST NOT affect the caller's pipeline. The caller always reports its own `STATUS: COMPLETE` or `NEEDS_CONTEXT` independently of background subagent outcomes.
 
+## Tool Resolution
+
+Batch-resolve all deferred MCP tools in a single `ToolSearch` call using `select:tool1,tool2` syntax. Do not call ToolSearch multiple times.
+
 ## Agent Config Loading
 
 At startup, if `project_dir` is available, call `mcp__ccx__get_agent_config(project_dir, agent_name)` where `agent_name` is this agent's identifier (e.g. "implementer", "reviewer").

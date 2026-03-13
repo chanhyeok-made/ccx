@@ -98,15 +98,25 @@ For each task in dependency order, output `### Executing T{N}: {description}`:
 
 If implementer returned COMPLETE with non-trivial assumptions → present to user via AskUserQuestion with alternatives as options before review.
 
-On reject → `git checkout -- {changed_files}` → re-implement with issues → re-review. Max 3 retries.
+### Verdict routing (즉시 실행, 숙고 금지)
 
-**Per-task checkpoint** (medium/complex only):
+| Verdict | Action |
+|---------|--------|
+| approve | Mark task done, proceed to next task |
+| request_changes | CHECKPOINT로 사용자에게 변경 요청 표시 → 사용자 승인 시 `git checkout -- {changed_files}` → re-implement with reviewer feedback → re-review |
+| reject | 즉시 `git checkout -- {changed_files}` → re-implement with reviewer feedback appended → re-review (max 3 cycles) |
 
->>> CHECKPOINT("T{N} 구현 결과를 확인해주세요.\n\n{changed_files_summary}", "코드 확인", ["Approve", "Request changes", "Reject & redo"])
+**reject 즉시 재실행 템플릿** (implementer 재호출 시 task_description에 append):
+> 이전 구현이 리뷰어에 의해 reject되었습니다.
+> 리뷰어 피드백: {reviewer_issues}
+> git checkout으로 파일을 복원했습니다. 피드백을 반영하여 재구현하세요.
+
+**Per-task checkpoint** (medium/complex only, approve verdict에서만 표시):
+
+>>> CHECKPOINT("T{N} 구현 결과를 확인해주세요.\n\n{changed_files_summary}", "코드 확인", ["Approve", "Request changes"])
 
 - "Approve" → proceed.
 - "Request changes" → ask what to change (AskUserQuestion with options from context) → re-implement with user feedback → re-review → show again. Max 3 rounds.
-- "Reject & redo" → ask for new direction (AskUserQuestion) → restart from 2b with user's input.
 
 After approval, call `mcp__ccx__mark_stale_cascade` for affected scopes. Mark done via `TaskUpdate`.
 

@@ -43,7 +43,8 @@ def _parse_event_log(
 
     timeline_events include SubagentStart, SubagentStop, Stop,
     SessionStart, and UserPromptSubmit events.  SubagentStop events
-    carry ``last_assistant_message`` and ``stop_hook_active`` fields.
+    carry ``last_assistant_message``, ``stop_hook_active``,
+    ``input_tokens``, ``output_tokens``, and ``context_fill_pct`` fields.
     UserPromptSubmit events carry the ``prompt`` field.
 
     agent_calls track Agent tool invocations matched across
@@ -82,6 +83,11 @@ def _parse_event_log(
                         )
                         evt["stop_hook_active"] = entry.get(
                             "stop_hook_active", False
+                        )
+                        evt["input_tokens"] = entry.get("input_tokens")
+                        evt["output_tokens"] = entry.get("output_tokens")
+                        evt["context_fill_pct"] = entry.get(
+                            "context_fill_pct"
                         )
                     # UserPromptSubmit extras
                     if event_name == "UserPromptSubmit":
@@ -266,6 +272,15 @@ def _split_executions(
             elif active_stops:
                 message = active_stops[0].get("last_assistant_message", "")
 
+            # Extract inline token data from the best stop event
+            log_input_tokens = None
+            log_output_tokens = None
+            log_context_fill_pct = None
+            if best_stop:
+                log_input_tokens = best_stop.get("input_tokens")
+                log_output_tokens = best_stop.get("output_tokens")
+                log_context_fill_pct = best_stop.get("context_fill_pct")
+
             start_ts = start_evt.get("timestamp", "")
             end_ts = best_stop.get("timestamp", "") if best_stop else ""
 
@@ -307,6 +322,9 @@ def _split_executions(
                 "input_prompt": input_prompt,
                 "parent_agent_id": parent_agent_id,
                 "parent_agent_type": parent_agent_type,
+                "log_input_tokens": log_input_tokens,
+                "log_output_tokens": log_output_tokens,
+                "log_context_fill_pct": log_context_fill_pct,
             })
 
         # Also handle stops without matching starts (orphan stops)
@@ -326,6 +344,11 @@ def _split_executions(
                 message = inactive_stops[0].get("last_assistant_message", "")
             elif active_stops:
                 message = active_stops[0].get("last_assistant_message", "")
+
+            # Extract inline token data from the stop event
+            log_input_tokens = best_stop.get("input_tokens")
+            log_output_tokens = best_stop.get("output_tokens")
+            log_context_fill_pct = best_stop.get("context_fill_pct")
 
             end_ts = best_stop.get("timestamp", "")
             if end_ts and end_ts > exec_end:
@@ -356,6 +379,9 @@ def _split_executions(
                 "input_prompt": input_prompt,
                 "parent_agent_id": parent_agent_id,
                 "parent_agent_type": parent_agent_type,
+                "log_input_tokens": log_input_tokens,
+                "log_output_tokens": log_output_tokens,
+                "log_context_fill_pct": log_context_fill_pct,
             })
 
         # Sort agents by start_time, assign order
