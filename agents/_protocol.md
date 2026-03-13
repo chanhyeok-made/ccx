@@ -89,7 +89,7 @@ When the orchestrator uses `EnterWorktree`, `project_dir` becomes the worktree p
 - Use the `project_dir` received from the orchestrator as-is (do NOT attempt to resolve to the original repo path)
 - All MCP tool calls with `project_dir` parameter use the worktree path
 - Git operations work transparently in worktrees — no special handling needed
-- `.ccx/` storage (cache, session, agent config) is isolated per worktree by design
+- `.ccx/` storage (cache, session, agent config) is automatically shared with the original repo via `resolve_storage_dir` — no manual path resolution needed
 - A worktree cannot be removed from within its own directory — always `cd` to the original repository path before running `git worktree remove`
 
 ## Background Subagent

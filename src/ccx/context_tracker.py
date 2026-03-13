@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ccx._transcript_utils import parse_assistant_messages, infer_agent_info
+from ccx.storage import resolve_storage_dir
 
 _CCX_DIR = ".ccx"
 _CONTEXT_USAGE_DIR = "context-usage"
@@ -61,7 +62,7 @@ class AgentContextUsage:
 
 def _context_usage_dir(project_dir: str) -> Path:
     """Return .ccx/context-usage/ path."""
-    return Path(project_dir) / _CCX_DIR / _CONTEXT_USAGE_DIR
+    return Path(resolve_storage_dir(project_dir)) / _CCX_DIR / _CONTEXT_USAGE_DIR
 
 
 def _session_path(project_dir: str, session_id: str) -> Path:

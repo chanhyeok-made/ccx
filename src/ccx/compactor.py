@@ -16,6 +16,7 @@ from pathlib import Path
 from ccx._transcript_utils import parse_assistant_messages
 from ccx.context_tracker import parse_context_usage
 from ccx.session import get_context_summary
+from ccx.storage import resolve_storage_dir
 
 _CCX_DIR = ".ccx"
 _COMPACTION_FILE = "compaction-summary.json"
@@ -70,12 +71,12 @@ class CompactionSummary:
 
 def _compaction_path(project_dir: str | Path) -> Path:
     """Return .ccx/compaction-summary.json path."""
-    return Path(project_dir) / _CCX_DIR / _COMPACTION_FILE
+    return Path(resolve_storage_dir(str(project_dir))) / _CCX_DIR / _COMPACTION_FILE
 
 
 def _ensure_dir(project_dir: str | Path) -> None:
     """Create .ccx directory if needed."""
-    (Path(project_dir) / _CCX_DIR).mkdir(parents=True, exist_ok=True)
+    (Path(resolve_storage_dir(str(project_dir))) / _CCX_DIR).mkdir(parents=True, exist_ok=True)
 
 
 # ---------------------------------------------------------------------------

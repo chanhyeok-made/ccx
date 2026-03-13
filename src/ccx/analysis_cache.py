@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ccx.storage import resolve_storage_dir
+
 CACHE_DIR = ".ccx"
 CACHE_SUBDIR = "cache"
 SCOPES_SUBDIR = "scopes"
@@ -91,7 +93,7 @@ def normalize_scope(scope: str) -> str:
 
 def _cache_base(project_dir: str) -> Path:
     """Return .ccx/cache/ path."""
-    return Path(project_dir) / CACHE_DIR / CACHE_SUBDIR
+    return Path(resolve_storage_dir(project_dir)) / CACHE_DIR / CACHE_SUBDIR
 
 
 def _scopes_dir(project_dir: str) -> Path:
@@ -216,7 +218,7 @@ def _migrate_flat_to_dir(project_dir: str) -> None:
     Also handle v1->v2 field upgrades.
     Rename old file to analysis-cache.json.bak.
     """
-    legacy_path = Path(project_dir) / CACHE_DIR / _LEGACY_CACHE_FILE
+    legacy_path = Path(resolve_storage_dir(project_dir)) / CACHE_DIR / _LEGACY_CACHE_FILE
     if not legacy_path.exists():
         return
 
@@ -274,7 +276,7 @@ def _ensure_cache(project_dir: str) -> None:
     scopes_root.mkdir(parents=True, exist_ok=True)
 
     # Run migration if legacy flat file exists
-    legacy_path = Path(project_dir) / CACHE_DIR / _LEGACY_CACHE_FILE
+    legacy_path = Path(resolve_storage_dir(project_dir)) / CACHE_DIR / _LEGACY_CACHE_FILE
     if legacy_path.exists():
         _migrate_flat_to_dir(project_dir)
 

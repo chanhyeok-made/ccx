@@ -11,6 +11,8 @@ from pathlib import Path
 
 import click
 
+from ccx.storage import resolve_storage_dir
+
 GIT_REPO_URL = "git+https://github.com/chanhyeok-made/ccx.git"
 
 
@@ -82,10 +84,11 @@ def update(project_dir: str):
 def status(project_dir: str):
     """Check ccx installation status."""
     project = Path(project_dir).resolve()
+    storage_root = Path(resolve_storage_dir(str(project)))
 
     checks = {
         "base-context.yaml": (project / "base-context.yaml").exists(),
-        ".ccx/": (project / ".ccx").is_dir(),
+        ".ccx/": (storage_root / ".ccx").is_dir(),
         ".claude-plugin/plugin.json": (project / ".claude-plugin" / "plugin.json").exists(),
     }
 
@@ -98,13 +101,13 @@ def status(project_dir: str):
             all_ok = False
 
     # Analysis cache info
-    cache_dir = project / ".ccx" / "cache" / "scopes"
+    cache_dir = storage_root / ".ccx" / "cache" / "scopes"
     if cache_dir.exists():
         scope_files = list(cache_dir.rglob("_scope.json"))
         click.echo(f"  Analysis cache: {len(scope_files)} scope(s) cached (directory-based)")
     else:
         # Check for legacy flat file
-        legacy = project / ".ccx" / "analysis-cache.json"
+        legacy = storage_root / ".ccx" / "analysis-cache.json"
         if legacy.exists():
             click.echo("  Analysis cache: legacy format (will migrate on next use)")
         else:
@@ -125,7 +128,8 @@ def index(project_dir: str, reset: bool, verbose: bool):
     from ccx.analysis_cache import build_scope_tree
 
     project = Path(project_dir).resolve()
-    ccx_dir = project / ".ccx"
+    storage_root = Path(resolve_storage_dir(str(project)))
+    ccx_dir = storage_root / ".ccx"
 
     if not ccx_dir.exists():
         click.echo("Error: ccx is not initialized. Run 'ccx init' first.", err=True)
@@ -182,17 +186,18 @@ def usage(project_dir: str, limit: int, detail: str):
     from ccx.token_tracker import list_session_usages
 
     project = Path(project_dir).resolve()
-    ccx_dir = project / ".ccx"
+    storage_root = Path(resolve_storage_dir(str(project)))
+    ccx_dir = storage_root / ".ccx"
 
     if not ccx_dir.exists():
         click.echo("Error: ccx is not initialized. Run 'ccx init' first.", err=True)
         sys.exit(1)
 
     if detail:
-        _show_session_detail(str(project), detail)
+        _show_session_detail(str(storage_root), detail)
         return
 
-    result = list_session_usages(str(project), limit=limit)
+    result = list_session_usages(str(storage_root), limit=limit)
     sessions = result.get("sessions", [])
 
     if not sessions:
@@ -323,17 +328,18 @@ def context(project_dir: str, limit: int, detail: str):
     from ccx.context_tracker import list_context_usages, get_context_usage
 
     project = Path(project_dir).resolve()
-    ccx_dir = project / ".ccx"
+    storage_root = Path(resolve_storage_dir(str(project)))
+    ccx_dir = storage_root / ".ccx"
 
     if not ccx_dir.exists():
         click.echo("Error: ccx is not initialized. Run 'ccx init' first.", err=True)
         sys.exit(1)
 
     if detail:
-        _show_context_detail(str(project), detail)
+        _show_context_detail(str(storage_root), detail)
         return
 
-    result = list_context_usages(str(project), limit=limit)
+    result = list_context_usages(str(storage_root), limit=limit)
     sessions = result.get("sessions", [])
 
     if not sessions:
@@ -465,14 +471,15 @@ def dashboard(project_dir: str, port: int, export_html: bool, limit: int):
     from ccx.dashboard import generate_html
 
     project = Path(project_dir).resolve()
-    ccx_dir = project / ".ccx"
+    storage_root = Path(resolve_storage_dir(str(project)))
+    ccx_dir = storage_root / ".ccx"
 
     if not ccx_dir.exists():
         click.echo("Error: ccx is not initialized. Run 'ccx init' first.", err=True)
         sys.exit(1)
 
     click.echo(f"Generating dashboard for: {project}")
-    html = generate_html(str(project), limit=limit)
+    html = generate_html(str(storage_root), limit=limit)
 
     if export_html:
         out_path = ccx_dir / "dashboard.html"
@@ -567,8 +574,13 @@ def _format_tokens(value) -> str:
 
 
 def _ensure_ccx_directory(project: Path):
-    """Ensure .ccx/ and .ccx/logs/ directories exist."""
-    ccx_dir = project / ".ccx"
+    """Ensure .ccx/ and .ccx/logs/ directories exist.
+
+    Resolves the storage directory via ``resolve_storage_dir`` so that
+    worktrees share the original repo's .ccx/ directory.
+    """
+    storage_root = Path(resolve_storage_dir(str(project)))
+    ccx_dir = storage_root / ".ccx"
     ccx_dir.mkdir(exist_ok=True)
     (ccx_dir / "logs").mkdir(exist_ok=True)
     return ccx_dir

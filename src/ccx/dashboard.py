@@ -20,6 +20,7 @@ from pathlib import Path
 from ccx.token_tracker import list_session_usages, get_session_usage
 from ccx.context_tracker import list_context_usages, get_context_usage
 from ccx.session import load_session
+from ccx.storage import resolve_storage_dir
 
 
 # ---------------------------------------------------------------------------
@@ -445,7 +446,7 @@ def aggregate_data(project_dir: str, limit: int = 50) -> dict:
             context_details[sid] = detail
 
     # --- Event logs -> executions + tool usage ---
-    log_dir = Path(project_dir) / _LOG_DIR
+    log_dir = Path(resolve_storage_dir(project_dir)) / _LOG_DIR
     all_executions: list[dict] = []
     session_tool_usage: dict[str, dict[str, int]] = {}
     session_time_ranges: dict[str, tuple[str, str]] = {}
