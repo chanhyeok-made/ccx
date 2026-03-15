@@ -4,6 +4,7 @@ Skills, hooks, and MCP configuration are handled by the plugin system
 (claude plugin install). This CLI manages base-context.yaml and .ccx/ directory.
 """
 
+import json
 import shutil
 import subprocess
 import sys
@@ -29,7 +30,9 @@ def cli():
 def init(project_dir: str, force: bool):
     """Initialize ccx in a project directory.
 
-    Creates base-context.yaml and .ccx/ directory.
+    Creates base-context.yaml, .ccx/ directory, and configures tool
+    permissions in .claude/settings.local.json so that all ccx tools
+    are auto-approved.
     Skills, hooks, and MCP config are managed by the plugin system.
     """
     project = Path(project_dir).resolve()
@@ -40,9 +43,13 @@ def init(project_dir: str, force: bool):
     # 2. Create .ccx/ directory and logs subdirectory
     ccx_dir = _ensure_ccx_directory(project)
 
+    # 3. Configure tool permissions in .claude/settings.local.json
+    _ensure_permissions_settings(project, force)
+
     click.echo("\nccx initialized successfully!")
-    click.echo(f"  Base context: {project / 'base-context.yaml'}")
-    click.echo(f"  Session dir:  {ccx_dir}")
+    click.echo(f"  Base context:  {project / 'base-context.yaml'}")
+    click.echo(f"  Session dir:   {ccx_dir}")
+    click.echo(f"  Permissions:   {project / '.claude' / 'settings.local.json'}")
     click.echo("\nNext steps:")
     click.echo("  1. Edit base-context.yaml to describe your project")
     click.echo("  2. Run 'claude plugin install' to set up skills, hooks, and MCP")
@@ -584,6 +591,79 @@ def _ensure_ccx_directory(project: Path):
     ccx_dir.mkdir(exist_ok=True)
     (ccx_dir / "logs").mkdir(exist_ok=True)
     return ccx_dir
+
+
+# Tools that ccx auto-approves so users never need to click "Allow" manually.
+_PERMISSION_ALLOW_LIST = [
+    "Bash",
+    "Edit",
+    "Write",
+    "Read",
+    "Grep",
+    "Glob",
+    "WebSearch",
+    "WebFetch",
+    "mcp__plugin_ccx_ccx__*",
+    "mcp__ide__*",
+    "TaskCreate",
+    "TaskGet",
+    "TaskList",
+    "TaskUpdate",
+    "TaskOutput",
+    "TaskStop",
+    "NotebookEdit",
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "EnterWorktree",
+    "ExitWorktree",
+    "EnterPlanMode",
+    "ExitPlanMode",
+    "ListMcpResourcesTool",
+    "ReadMcpResourceTool",
+    "Agent",
+]
+
+
+def _ensure_permissions_settings(project: Path, force: bool = False):
+    """Create or update .claude/settings.local.json with tool permissions.
+
+    If the file already exists and *force* is False, new permissions are
+    merged into the existing ``permissions.allow`` list (union, deduplicated,
+    order-preserved).  Other keys in the file are preserved.
+
+    When *force* is True the ``permissions.allow`` list is replaced entirely.
+    """
+    claude_dir = project / ".claude"
+    claude_dir.mkdir(exist_ok=True)
+    settings_path = claude_dir / "settings.local.json"
+
+    if settings_path.exists():
+        try:
+            data = json.loads(settings_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            data = {}
+    else:
+        data = {}
+
+    if force:
+        data.setdefault("permissions", {})["allow"] = list(_PERMISSION_ALLOW_LIST)
+    else:
+        existing = data.get("permissions", {}).get("allow", [])
+        # Union with deduplication, preserving order (existing first)
+        seen = set(existing)
+        merged = list(existing)
+        for perm in _PERMISSION_ALLOW_LIST:
+            if perm not in seen:
+                merged.append(perm)
+                seen.add(perm)
+        data.setdefault("permissions", {})["allow"] = merged
+
+    settings_path.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    click.echo(f"  Permissions configured in .claude/settings.local.json")
 
 
 def _create_base_context_starter(project: Path, force: bool = False):

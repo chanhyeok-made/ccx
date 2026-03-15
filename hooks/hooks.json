@@ -109,6 +109,11 @@
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/log_event.sh",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/ensure_settings.sh",
+            "timeout": 10
           }
         ]
       }
