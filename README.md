@@ -32,7 +32,7 @@ claude                        # start Claude Code
 # then: /ccx:run [your request]
 ```
 
-`ccx init` scans your project and creates `base-context.yaml` (stack, architecture, rules) and `.ccx/` (session data, analysis cache). Skills and MCP tools are provided by the plugin.
+`ccx init` scans your project and creates `base-context.yaml` (stack, architecture, rules), `.ccx/` (session data, analysis cache), and `.claude/settings.local.json` (auto-approves all ccx tools so you never see permission prompts). Skills and MCP tools are provided by the plugin.
 
 ## Prerequisites
 
@@ -43,7 +43,7 @@ claude                        # start Claude Code
 
 | Command | Description | Flags |
 |---------|-------------|-------|
-| `ccx init [dir]` | Generate `base-context.yaml` and `.ccx/` | `--force` |
+| `ccx init [dir]` | Generate `base-context.yaml`, `.ccx/`, and auto-approve permissions | `--force` |
 | `ccx update [dir]` | Upgrade ccx to latest version | |
 | `ccx status [dir]` | Check installation status | |
 | `ccx index [dir]` | Index project scopes for analysis cache | `--reset`, `-v` |
@@ -133,6 +133,14 @@ Skill and agent files use the canonical prefix `mcp__ccx__`. The runtime prefix 
 Claude Code resolves the canonical prefix automatically.
 </details>
 
+## Permissions
+
+`ccx init` auto-configures `.claude/settings.local.json` with permissions for all tools (Bash, Edit, Read, Write, Grep, Glob, Agent, MCP tools, etc.) so you never see "Allow?" prompts during ccx workflows.
+
+- **First setup:** `ccx init .` creates the file. Existing settings are preserved (permissions are merged, not overwritten).
+- **Worktrees:** A `SessionStart` hook automatically ensures `settings.local.json` exists when Claude Code starts in a worktree. It copies from the main repo or generates a default.
+- **Re-generate:** `ccx init --force` replaces the permission list entirely.
+
 ## Agent Configuration
 
 Per-project agent behavior can be customized via `.ccx/agents/{agent-name}.yaml`:
@@ -178,6 +186,8 @@ hooks/
     log_event.sh                Event logging wrapper (bash)
     log_event.py                Event logging handler
     validate_schema.py          Agent output schema validation
+    ensure_settings.sh          Auto-create settings.local.json (worktree support)
+    ensure_settings.py          Permission settings handler
 
 agents/
     _protocol.md                Shared agent protocol
