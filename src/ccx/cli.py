@@ -76,7 +76,27 @@ def update(project_dir: str):
     _ensure_ccx_directory(project)
 
     click.echo(f"\nccx package upgraded successfully!")
-    click.echo("Run 'claude plugin install' to update skills, hooks, and MCP config.")
+
+    # Update the Claude Code plugin (skills, hooks, MCP config)
+    click.echo("Updating Claude Code plugin...")
+    try:
+        subprocess.run(
+            ["claude", "plugin", "update", "ccx@chanhyeok-plugins"],
+            check=True, capture_output=True, text=True,
+        )
+        click.echo("Plugin updated successfully.")
+    except subprocess.CalledProcessError as e:
+        click.echo(
+            f"Warning: Plugin update failed:\n{e.stderr}\n"
+            "You can manually run: claude plugin update ccx@chanhyeok-plugins",
+            err=True,
+        )
+    except FileNotFoundError:
+        click.echo(
+            "Warning: 'claude' CLI not found. "
+            "Manually run: claude plugin update ccx@chanhyeok-plugins",
+            err=True,
+        )
 
 
 @cli.command()
