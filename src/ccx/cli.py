@@ -15,6 +15,8 @@ import click
 from ccx.storage import resolve_storage_dir
 
 GIT_REPO_URL = "git+https://github.com/chanhyeok-made/ccx.git"
+MARKETPLACE_REPO = "chanhyeok-made/claude-plugins"
+MARKETPLACE_NAME = "chanhyeok-plugins"
 
 
 @click.group()
@@ -46,13 +48,16 @@ def init(project_dir: str, force: bool):
     # 3. Configure tool permissions in .claude/settings.local.json
     _ensure_permissions_settings(project, force)
 
+    # 4. Ensure marketplace is registered for plugin discovery
+    _ensure_marketplace_registered()
+
     click.echo("\nccx initialized successfully!")
     click.echo(f"  Base context:  {project / 'base-context.yaml'}")
     click.echo(f"  Session dir:   {ccx_dir}")
     click.echo(f"  Permissions:   {project / '.claude' / 'settings.local.json'}")
     click.echo("\nNext steps:")
     click.echo("  1. Edit base-context.yaml to describe your project")
-    click.echo("  2. Run 'claude plugin install' to set up skills, hooks, and MCP")
+    click.echo("  2. Run 'claude plugin install ccx@chanhyeok-plugins' to set up skills, hooks, and MCP")
     click.echo("  3. Start Claude Code and use /ccx:run [request]")
 
 
@@ -83,6 +88,9 @@ def update(project_dir: str):
     _ensure_ccx_directory(project)
 
     click.echo(f"\nccx package upgraded successfully!")
+
+    # Ensure marketplace is registered before updating plugin
+    _ensure_marketplace_registered()
 
     # Update the Claude Code plugin (skills, hooks, MCP config)
     click.echo("Updating Claude Code plugin...")
@@ -684,6 +692,50 @@ def _ensure_permissions_settings(project: Path, force: bool = False):
         encoding="utf-8",
     )
     click.echo(f"  Permissions configured in .claude/settings.local.json")
+
+
+def _ensure_marketplace_registered():
+    """Ensure the ccx marketplace is registered in Claude Code.
+
+    Checks ``claude plugin marketplace list`` for the marketplace name and,
+    if missing, runs ``claude plugin marketplace add`` to register it.
+    Failures are treated as non-fatal warnings.
+    """
+    try:
+        result = subprocess.run(
+            ["claude", "plugin", "marketplace", "list"],
+            capture_output=True, text=True,
+        )
+        if MARKETPLACE_NAME in result.stdout:
+            click.echo(f"  Marketplace '{MARKETPLACE_NAME}' already registered.")
+            return
+    except FileNotFoundError:
+        click.echo(
+            "Warning: 'claude' CLI not found. "
+            f"Manually run: claude plugin marketplace add {MARKETPLACE_REPO}",
+            err=True,
+        )
+        return
+
+    click.echo(f"  Registering marketplace '{MARKETPLACE_REPO}'...")
+    try:
+        subprocess.run(
+            ["claude", "plugin", "marketplace", "add", MARKETPLACE_REPO],
+            check=True, capture_output=True, text=True,
+        )
+        click.echo(f"  Marketplace registered successfully.")
+    except subprocess.CalledProcessError as e:
+        click.echo(
+            f"Warning: Marketplace registration failed:\n{e.stderr}\n"
+            f"You can manually run: claude plugin marketplace add {MARKETPLACE_REPO}",
+            err=True,
+        )
+    except FileNotFoundError:
+        click.echo(
+            "Warning: 'claude' CLI not found. "
+            f"Manually run: claude plugin marketplace add {MARKETPLACE_REPO}",
+            err=True,
+        )
 
 
 def _create_base_context_starter(project: Path, force: bool = False):
