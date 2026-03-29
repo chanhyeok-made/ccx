@@ -17,7 +17,7 @@ from ccx.compactor import (
     CompactionSummary,
 )
 from ccx.config import load_base_context
-from ccx.session import load_session, save_record, get_context_summary
+from ccx.session import load_session, save_record, get_context_summary, save_task_title, get_task_title
 from ccx.agent_config import (
     get_agent_config as _get_agent_config,
     save_agent_config as _save_agent_config,
@@ -141,6 +141,29 @@ def record_execution(
         changes=changes,
     )
     return {"status": "recorded", "record": record}
+
+
+@mcp.tool()
+def set_task_title(project_dir: str, title: str, session_id: str = "") -> dict:
+    """Set the current task title for notification context.
+
+    Args:
+        project_dir: Project root directory path.
+        title: Task title to set.
+        session_id: Optional session ID.
+    """
+    save_task_title(project_dir, title, session_id)
+    return {"status": "saved", "title": title}
+
+
+@mcp.tool()
+def get_task_title_tool(project_dir: str) -> dict:
+    """Get the current task title.
+
+    Args:
+        project_dir: Project root directory path.
+    """
+    return get_task_title(project_dir)
 
 
 @mcp.tool()

@@ -51,12 +51,29 @@ This step is automatic and requires no user interaction.
 
 ---
 
+## [Phase 0.5/4] Purpose Clarification
+
+Distill the raw user request into a clear purpose statement and task title before planning begins.
+
+1. Launch `ccx:clarifier` Agent:
+   > project_dir="{project_dir}"
+   > request="{user_request}"
+2. Handle per handling loop. Extract `task_title` and `purpose` from the result.
+3. Call `mcp__ccx__set_task_title(project_dir, task_title, session_id)` to persist the title for notification context (e.g., macOS notifications can display what the pipeline is working on).
+4. Retain `task_title` and `purpose` for Phase 1:
+   - Pass `purpose` (enriched request) to the planner instead of the raw `user_request`.
+   - Display `task_title` in the Phase 1 checkpoint so the user sees the distilled intent.
+
+This step is automatic and requires no user interaction.
+
+---
+
 ## [Phase 1/4] Adaptive Plan
 
 Launch `ccx:planner` Agent:
 
 > project_dir="{project_dir}"
-> request="{user_request}"
+> request="{purpose}"
 
 The planner performs analysis (formerly a separate agent) AND task decomposition in one pass:
 1. Loads project context, session, and scope cache via MCP tools
@@ -66,7 +83,7 @@ The planner performs analysis (formerly a separate agent) AND task decomposition
 
 Handle per handling loop. Show result. Create tasks with `TaskCreate`.
 
->>> CHECKPOINT("분석 및 계획이 맞나요?", "계획 확인", ["Proceed", "Modify", "Cancel"])
+>>> CHECKPOINT("[{task_title}] 분석 및 계획이 맞나요?", "계획 확인", ["Proceed", "Modify", "Cancel"])
 
 ---
 

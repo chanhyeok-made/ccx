@@ -12,6 +12,7 @@ Always exits 0 to never block Claude Code.
 """
 
 import json
+import os
 import subprocess
 import sys
 
@@ -41,48 +42,106 @@ def _escape(text: str) -> str:
     )
 
 
+def _read_task_title(project_dir: str) -> str:
+    """Read the current task title from .ccx/current_task_title if it exists."""
+    if not project_dir:
+        return ""
+    path = os.path.join(project_dir, ".ccx", "current_task_title")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except (OSError, IOError):
+        return ""
+
+
+def _project_name(cwd: str) -> str:
+    """Extract the project directory name from the working directory path."""
+    if not cwd:
+        return ""
+    return os.path.basename(cwd)
+
+
 def _build_message(event: str, data: dict) -> tuple[str, str] | None:
     """Return (title, body) for a supported event, or None to skip."""
     if event == "Notification":
-        body = data.get("message") or "Attention needed"
+        msg = data.get("message") or "Attention needed"
+        ntype = data.get("notification_type")
+        body = f"[{ntype}] {msg}" if ntype else msg
         return "Claude Code", body
 
     if event == "Stop":
-        return "Claude Code", "\uc751\ub2f5 \uc644\ub8cc \u2014 \ud655\uc778\ud574\uc8fc\uc138\uc694"
+        last_msg = data.get("last_assistant_message") or ""
+        if last_msg:
+            first_line = last_msg.split("\n", 1)[0]
+            body = _truncate(first_line, 100)
+        else:
+            body = "\uc751\ub2f5 \uc644\ub8cc \u2014 \ud655\uc778\ud574\uc8fc\uc138\uc694"
+        return "Claude Code", body
 
     if event == "StopFailure":
         error = data.get("error") or "unknown error"
-        return "Claude Code \u26a0\ufe0f", f"\uc624\ub958 \ubc1c\uc0dd: {error}"
+        details = data.get("error_details")
+        body = f"\uc624\ub958 \ubc1c\uc0dd: {error}"
+        if details:
+            body += f" ({_truncate(details, 80)})"
+        return "Claude Code", body
 
     if event == "PermissionRequest":
         tool = data.get("tool_name") or "unknown"
-        return "Claude Code", f"\uad8c\ud55c \uc694\uccad: {tool}"
+        tool_input = data.get("tool_input") or {}
+        summary = ""
+        if isinstance(tool_input, dict):
+            if "command" in tool_input:
+                summary = _truncate(str(tool_input["command"]), 80)
+            elif tool_input:
+                first_key = next(iter(tool_input))
+                summary = f"{first_key}: {_truncate(str(tool_input[first_key]), 60)}"
+        body = f"\uad8c\ud55c \uc694\uccad: {tool}"
+        if summary:
+            body += f" \u2014 {summary}"
+        return "Claude Code", body
 
     if event == "Elicitation":
         tool = data.get("tool_name") or "unknown"
-        return "Claude Code", f"\uc785\ub825 \uc694\uccad: {tool}"
+        server = data.get("mcp_server")
+        body = f"\uc785\ub825 \uc694\uccad: {tool}"
+        if server:
+            body += f" ({server})"
+        return "Claude Code", body
 
     if event == "TaskCompleted":
         subject = data.get("task_subject") or "task"
-        return "Claude Code", f"\ud0dc\uc2a4\ud06c \uc644\ub8cc: {subject}"
+        desc = data.get("task_description") or ""
+        first_line = desc.split("\n", 1)[0] if desc else ""
+        body = f"\ud0dc\uc2a4\ud06c \uc644\ub8cc: {subject}"
+        if first_line:
+            body += f" \u2014 {_truncate(first_line, 80)}"
+        return "Claude Code", body
 
     if event == "TeammateIdle":
         name = data.get("teammate_name") or "teammate"
-        return "Claude Code", f"\ud300\uba54\uc774\ud2b8 \ub300\uae30\uc911: {name}"
+        team = data.get("team_name")
+        body = f"\ud300\uba54\uc774\ud2b8 \ub300\uae30\uc911: {name}"
+        if team:
+            body += f" ({team})"
+        return "Claude Code", body
 
     return None
 
 
-def _notify(title: str, body: str) -> None:
-    """Display a macOS notification via osascript."""
+def _notify(title: str, subtitle: str, body: str) -> None:
+    """Display a macOS notification via osascript with optional subtitle."""
     safe_title = _escape(_truncate(title))
+    safe_subtitle = _escape(_truncate(subtitle, 80))
     safe_body = _escape(_truncate(body))
 
     script = (
         f'display notification "{safe_body}" '
         f'with title "{safe_title}" '
-        f'sound name "Glass"'
     )
+    if safe_subtitle:
+        script += f'subtitle "{safe_subtitle}" '
+    script += 'sound name "Glass"'
 
     subprocess.run(
         ["osascript", "-e", script],
@@ -99,13 +158,19 @@ def main():
 
     data = json.loads(raw)
     event = data.get("hook_event_name", "unknown")
+    cwd = data.get("cwd", "")
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR", cwd)
+
+    task_title = _read_task_title(project_dir)
+    proj_name = _project_name(cwd)
+    subtitle = task_title or proj_name
 
     message = _build_message(event, data)
     if message is None:
         return
 
     title, body = message
-    _notify(title, body)
+    _notify(title, subtitle, body)
 
 
 if __name__ == "__main__":

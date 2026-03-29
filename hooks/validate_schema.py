@@ -42,6 +42,9 @@ AGENT_SCHEMAS = {
     "ccx:package-synthesizer": {
         "required_markers": ["STATUS: COMPLETE"],
     },
+    "ccx:clarifier": {
+        "required_markers": ["task_title:", "purpose:", "scope_summary:"],
+    },
 }
 
 

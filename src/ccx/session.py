@@ -82,6 +82,38 @@ def save_record(
     return record
 
 
+def save_task_title(project_dir: str, title: str, session_id: str = "") -> None:
+    """Save current task title to .ccx/task_title.json and a flat file .ccx/current_task_title for hooks."""
+    storage = Path(resolve_storage_dir(project_dir)) / SESSION_DIR
+    storage.mkdir(parents=True, exist_ok=True)
+
+    data = {
+        "title": title,
+        "session_id": session_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # JSON for MCP consumption
+    path = storage / "task_title.json"
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # Plain text flat file for hook consumption (hooks can't call MCP)
+    flat = storage / "current_task_title"
+    flat.write_text(title, encoding="utf-8")
+
+
+def get_task_title(project_dir: str) -> dict:
+    """Read current task title from .ccx/task_title.json."""
+    storage = Path(resolve_storage_dir(project_dir)) / SESSION_DIR
+    path = storage / "task_title.json"
+    if not path.exists():
+        return {"title": "", "session_id": "", "timestamp": ""}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {"title": "", "session_id": "", "timestamp": ""}
+
+
 def get_context_summary(project_dir: str) -> str:
     """Generate a summary of recent context for follow-up requests."""
     records = load_session(project_dir, limit=3)

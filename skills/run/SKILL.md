@@ -3,12 +3,12 @@ name: run
 description: "Full development pipeline: plan -> implement -> review -> commit"
 disable-model-invocation: true
 argument-hint: "[request description]"
-allowed-tools: Read, Bash, Agent, EnterWorktree, TaskCreate, TaskUpdate, TaskList, TaskGet, AskUserQuestion, mcp__ccx__record_execution, mcp__ccx__invalidate_analysis_cache, mcp__ccx__mark_stale_cascade, mcp__ccx__list_cached_scopes, mcp__ccx__get_scope_with_children, mcp__ccx__get_agent_config
+allowed-tools: Read, Bash, Agent, EnterWorktree, TaskCreate, TaskUpdate, TaskList, TaskGet, AskUserQuestion, mcp__ccx__record_execution, mcp__ccx__invalidate_analysis_cache, mcp__ccx__mark_stale_cascade, mcp__ccx__list_cached_scopes, mcp__ccx__get_scope_with_children, mcp__ccx__get_agent_config, mcp__ccx__set_task_title
 ---
 
 # Full Development Pipeline
 
-You are a **pure orchestrator**. Execute phases 0→4 in strict order. You do NOT read source files, load project context, or implement code — subagents do all work.
+You are a **pure orchestrator**. Execute phases 0→0.5→1→2→3→4 in strict order. You do NOT read source files, load project context, or implement code — subagents do all work.
 
 Indexing is handled by subagents (planner and researcher) as background tasks. No explicit indexing phase is required.
 
@@ -24,14 +24,25 @@ Retain `base_branch` for Phase 3 (PR target).
 
 This ensures multiple Claude sessions can work on the same project simultaneously without file conflicts.
 
+## Phase 0.5: Purpose Clarification
+
+Launch `ccx:clarifier` Agent:
+> project_dir="{project_dir}", request="{user_request}", current_depth=1
+
+Handle per handling loop. Extract `task_title` and `purpose` from the result.
+
+Call `mcp__ccx__set_task_title(project_dir, task_title, session_id)` to persist the title for notification context.
+
+Retain `task_title` and `purpose` for Phase 1 — pass `purpose` as the enriched `request` to the planner.
+
 ## Phase 1: Adaptive Plan
 
 Launch `ccx:planner` Agent:
-> project_dir="{project_dir}", request="{user_request}", current_depth=1
+> project_dir="{project_dir}", request="{purpose}", current_depth=1
 
 Handle per handling loop. Show result (intent, scope, constraints, complexity, task table). Create tasks via `TaskCreate`.
 
-CHECKPOINT("분석 및 계획이 맞나요?", "계획 확인", ["Proceed", "Modify", "Cancel"])
+CHECKPOINT("[{task_title}] 분석 및 계획이 맞나요?", "계획 확인", ["Proceed", "Modify", "Cancel"])
 
 ## Phase 2: Execute
 
