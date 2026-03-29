@@ -85,6 +85,28 @@
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/log_event.sh",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/notify_macos.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/log_event.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/notify_macos.sh",
+            "timeout": 10
           }
         ]
       }
@@ -96,6 +118,11 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/log_event.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/notify_macos.sh",
             "timeout": 10
           }
         ]
@@ -138,6 +165,28 @@
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/log_event.sh",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/notify_macos.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Elicitation": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/log_event.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/notify_macos.sh",
+            "timeout": 10
           }
         ]
       }
@@ -150,6 +199,11 @@
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/log_event.sh",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/notify_macos.sh",
+            "timeout": 10
           }
         ]
       }
@@ -161,6 +215,11 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/log_event.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/notify_macos.sh",
             "timeout": 10
           }
         ]
